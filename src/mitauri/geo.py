@@ -14,7 +14,9 @@ ATTRIBUTION = "Data © OpenStreetMap contributors"
 TIMEOUT_SECONDS = 15
 MIN_SECONDS_BETWEEN_SEARCHES = 1.1
 CACHE_SECONDS = 3600
-SEARCH_BOX_DEGREES = 0.3
+# Search ranks by importance, not closeness, so it looks in small areas first: about 5, 10 and 33 km.
+SEARCH_BOX_DEGREES = (0.05, 0.1, 0.3)
+FAR_KM = 40
 ROUTE_MODES = {"driving": "car", "cycling": "bike", "walking": "foot"}
 
 _last_search = 0.0
@@ -48,18 +50,8 @@ def parse_places(results: list, near: tuple[float, float] | None) -> list[dict]:
     return sorted(places, key=lambda p: p["distance_km"]) if near else places
 
 
-def search(query: str, near: tuple[float, float] | None = None, limit: int = 5) -> list[dict]:
-    """Near a position, results inside the surrounding area come first. Distances use the exact position
-    on this machine, but only a rough one is sent."""
+def _request(params: dict, near: tuple[float, float] | None) -> list[dict]:
     global _last_search
-    params = {"q": query[:200], "format": "jsonv2", "limit": limit, "countrycodes": "de,at,ch,nl,be,fr,lu"}
-    if near:
-        latitude, longitude = rough(near[0]), rough(near[1])
-        params["viewbox"] = (
-            f"{longitude - SEARCH_BOX_DEGREES},{latitude + SEARCH_BOX_DEGREES},"
-            f"{longitude + SEARCH_BOX_DEGREES},{latitude - SEARCH_BOX_DEGREES}"
-        )
-        params["bounded"] = 1
     key = tuple(sorted(params.items()))
     cached = _cache.get(key)
     if cached and cached[0] > time.time():
@@ -71,6 +63,21 @@ def search(query: str, near: tuple[float, float] | None = None, limit: int = 5) 
     results = _get(f"{SEARCH_URL}?{urlencode(params)}")
     _cache[key] = (time.time() + CACHE_SECONDS, results)
     return parse_places(results, near)
+
+
+def search(query: str, near: tuple[float, float] | None = None, limit: int = 5) -> list[dict]:
+    """Near a position, looks outward until something turns up, nearest first, and only then everywhere,
+    which is how a place in another city gets found. Distances use the exact position on this machine,
+    but only a rough one is sent."""
+    params = {"q": query[:200], "format": "jsonv2", "limit": limit, "countrycodes": "de,at,ch,nl,be,fr,lu"}
+    if near:
+        latitude, longitude = rough(near[0]), rough(near[1])
+        for box in SEARCH_BOX_DEGREES:
+            viewbox = f"{longitude - box:.2f},{latitude + box:.2f},{longitude + box:.2f},{latitude - box:.2f}"
+            found = _request({**params, "limit": max(limit, 20), "viewbox": viewbox, "bounded": 1}, near)
+            if found:
+                return found[:limit]
+    return _request(params, near)[:limit]
 
 
 def route(start: tuple[float, float], end: tuple[float, float], mode: str = "driving") -> dict | None:

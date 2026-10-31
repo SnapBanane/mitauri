@@ -655,7 +655,7 @@ def test_rain_tip_only_when_rain_is_likely_soon():
 
 def test_place_reminder_tool_clamps_radius_and_reports_the_place(monkeypatch):
     sent = {}
-    monkeypatch.setattr(tools.geo, "search", lambda name, near=None, limit=5: [{"latitude": 48.1, "longitude": 11.5, "name": "Rewe, München"}])
+    monkeypatch.setattr(tools, "_closest_place", lambda name, allow_far: ({"latitude": 48.1, "longitude": 11.5, "name": "Rewe, München"}, ""))
     monkeypatch.setattr(tools, "_ask_server", lambda path, body=None: sent.update(body) or {"result": "Set."})
     assert "Rewe, München" in tools.remind_at_place("Milch", "Rewe München", radius_metres=5)
     assert sent["radius"] == 100
@@ -666,24 +666,58 @@ def test_place_tools_are_not_on_discord():
     assert not tools.LIMITED_TOOLS & {"remind_at_place", "list_place_reminders", "cancel_place_reminder"}
 
 
-def test_places_sort_by_distance_and_only_a_rough_position_is_sent(monkeypatch):
+def fake_places(monkeypatch, by_box):
+    """by_box maps the box size to results. Without a box, it's the search everywhere."""
     urls = []
 
     def fake(url):
         urls.append(url)
-        return [
-            {"lat": "48.2", "lon": "11.5", "display_name": "Far", "type": "shop"},
-            {"lat": "48.151", "lon": "11.512", "display_name": "Close", "type": "shop"},
-        ]
+        for box, results in by_box.items():
+            if box and f"viewbox={box}" in url.replace("%2C", ","):
+                return results
+        return by_box.get(None, []) if "viewbox" not in url else []
 
     monkeypatch.setattr(geo, "_get", fake)
     monkeypatch.setattr(geo, "MIN_SECONDS_BETWEEN_SEARCHES", 0)
-    places = geo.search("rewe unique query", near=(48.15123456, 11.51234567))
-    assert [p["name"] for p in places] == ["Close", "Far"]
+    geo._cache.clear()
+    return urls
+
+
+CLOSE = {"lat": "48.151", "lon": "11.512", "display_name": "Close", "type": "shop"}
+ALSO_CLOSE = {"lat": "48.16", "lon": "11.52", "display_name": "Also close", "type": "shop"}
+BONN = {"lat": "50.73", "lon": "7.10", "display_name": "Bonn", "type": "shop"}
+HERE = (48.15123456, 11.51234567)
+
+
+def test_search_stops_at_the_smallest_area_with_results_and_sorts_by_distance(monkeypatch):
+    urls = fake_places(monkeypatch, {"11.46": [ALSO_CLOSE, CLOSE], None: [BONN]})
+    places = geo.search("rewe", near=HERE)
+    assert [p["name"] for p in places] == ["Close", "Also close"]
     assert places[0]["distance_km"] < 1
+    assert len(urls) == 1
     assert "48.15123" not in urls[0] and "11.51234" not in urls[0]
-    geo.search("rewe unique query", near=(48.15123456, 11.51234567))
+    geo.search("rewe", near=HERE)
     assert len(urls) == 1  # a repeat is answered from the cache
+
+
+def test_search_widens_then_goes_everywhere(monkeypatch):
+    urls = fake_places(monkeypatch, {"11.21": [CLOSE]})
+    assert geo.search("x", near=HERE)[0]["name"] == "Close"
+    assert len(urls) == 3
+    urls = fake_places(monkeypatch, {None: [BONN]})
+    assert geo.search("apotheke bonn", near=HERE)[0]["name"] == "Bonn"
+    assert len(urls) == 4
+
+
+def test_far_places_need_confirming_and_unknown_location_too(monkeypatch):
+    fake_places(monkeypatch, {None: [BONN]})
+    monkeypatch.setattr(tools, "_phone_position", lambda: HERE)
+    place, problem = tools._closest_place("rewe", allow_far=False)
+    assert place is None and "km away" in problem
+    assert tools._closest_place("rewe", allow_far=True)[0]["name"] == "Bonn"
+    geo._cache.clear()
+    monkeypatch.setattr(tools, "_phone_position", lambda: None)
+    assert tools._closest_place("rewe", allow_far=False)[0] is None
 
 
 def test_route_sends_a_rough_start_and_handles_no_route(monkeypatch):
