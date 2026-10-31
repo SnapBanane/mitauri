@@ -823,8 +823,8 @@ private fun MusicCompact(music: NowPlaying, levels: BarLevels, camera: CameraHol
     AroundCamera(
         camera,
         {
-            MusicBars(levels, music.accent, Modifier.padding(end = 6.dp).size(width = 19.dp, height = 16.dp))
             Cover(music, levels, 20.dp, 5.dp, 0.1f)
+            MusicBars(levels, music.accent, Modifier.padding(start = 6.dp).size(width = 19.dp, height = 16.dp))
         },
         { SongTitle(music.title, Modifier.widthIn(max = MUSIC_TITLE_WIDTH), 14) },
     )
