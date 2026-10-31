@@ -358,7 +358,7 @@ object Mitauri {
                 "reply" -> main.post { onReply(data.getString("text")) }
                 "door_command" -> main.post { DoorOpener.command(app) }
                 "open_door", "read_notifications", "ask_to_reply", "add_place_reminder", "list_place_reminders", "remove_place_reminder" -> main.post { answerRequest(webSocket, data) }
-                "ring", "notify", "alarm", "alarm_over" -> {
+                "ring", "notify", "alarm", "alarm_over", "live_show", "live_clear" -> {
                     // Tells the server it arrived, so it can fall back to Discord if it didn't.
                     webSocket.send(JSONObject().put("type", "ack").put("id", data.getString("id")).toString())
                     main.post {
@@ -366,6 +366,11 @@ object Mitauri {
                             "ring" -> Calls.ring(app, data.getString("text"))
                             "alarm" -> Calls.alarmStarted(app, data.getString("text"))
                             "alarm_over" -> Calls.alarmOver(app)
+                            "live_show" -> Island.setLive(
+                                app,
+                                LiveCountdown(data.getString("text"), data.getLong("until") * 1000, data.optString("detail")),
+                            )
+                            "live_clear" -> Island.clearLive()
                             else -> Calls.notify(app, "Reminder", data.getString("text"))
                         }
                     }

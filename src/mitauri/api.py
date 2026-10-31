@@ -6,6 +6,7 @@ import hmac
 import json
 import logging
 import re
+import time
 import uuid
 
 from aiohttp import WSMsgType, web
@@ -31,7 +32,7 @@ MAX_MESSAGE_CHARS = 20_000
 MAX_SPEECH_CHARS = 2_000
 LOOPBACK = ("127.0.0.1", "::1")
 DEVICE = web.RequestKey("device", str)
-INTERNAL_PATHS = ("/location", "/door", "/notifications", "/reply", "/place-reminders", "/presence", "/alarm-notice")
+INTERNAL_PATHS = ("/location", "/door", "/notifications", "/reply", "/place-reminders", "/presence", "/alarm-notice", "/island")
 MAX_REPLY_CHARS = 1_000
 JPEG_START = b"\xff\xd8\xff"
 
@@ -99,6 +100,7 @@ class Api:
     def __init__(self, brain, internal_token: str, data_dir, speech=None, memory=None, presence=None, history=None):
         self._history = history
         self._presence = presence
+        self._live = None
         self._brain = brain
         self._internal_token = internal_token
         self._data_dir = data_dir
@@ -122,6 +124,7 @@ class Api:
         app.router.add_post("/reply", self._on_ask_to_reply)
         app.router.add_post("/place-reminders", self._on_place_reminder)
         app.router.add_post("/alarm-notice", self._on_alarm_notice)
+        app.router.add_post("/island", self._on_island)
         app.router.add_get("/presence", self._on_presence)
         app.router.add_get("/presence-key", self._on_presence_key)
         app.router.add_post("/photo", self._on_photo)
@@ -230,6 +233,11 @@ class Api:
         socket = web.WebSocketResponse(max_msg_size=MAX_MESSAGE_CHARS * 4)  # the app pings rarely, to save battery
         await socket.prepare(request)
         self._phone = socket
+        if self._live and self._live["until"] > time.time():
+            await socket.send_json({
+                "type": "live_show", "id": "resend", "text": self._live["title"],
+                "until": self._live["until"], "detail": self._live["detail"],
+            })
         log.info("Phone connected")
         async for message in socket:
             if message.type != WSMsgType.TEXT:
@@ -296,7 +304,7 @@ class Api:
             reply = f"Something went wrong: {error}"
         return web.json_response({"reply": reply})
 
-    async def deliver(self, kind: str, text: str) -> bool:
+    async def deliver(self, kind: str, text: str, **fields) -> bool:
         """Sends a call or reminder to the phone. Returns whether the phone confirmed it arrived."""
         phone = self._phone
         if phone is None or phone.closed:
@@ -305,7 +313,7 @@ class Api:
         future = asyncio.get_running_loop().create_future()
         self._pending[delivery_id] = future
         try:
-            await phone.send_json({"type": kind, "id": delivery_id, "text": text})
+            await phone.send_json({"type": kind, "id": delivery_id, "text": text, **fields})
             await asyncio.wait_for(future, DELIVERY_TIMEOUT_SECONDS)
             return True
         except (TimeoutError, ConnectionError):
@@ -374,6 +382,28 @@ class Api:
         answer.pop("type", None)
         record(self._data_dir, "phone_request", kind=kind, ok="error" not in answer)
         return web.json_response(answer)
+
+    async def show_live(self, title: str, until: float, detail: str = "") -> bool:
+        """Shows a countdown in the island. It's kept, so it comes back if the phone reconnects."""
+        self._live = {"title": title, "until": int(until), "detail": detail}
+        return await self.deliver("live_show", title, until=int(until), detail=detail)
+
+    async def clear_live(self) -> bool:
+        self._live = None
+        return await self.deliver("live_clear", "")
+
+    async def _on_island(self, request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+            if data["action"] == "clear":
+                return web.json_response({"delivered": await self.clear_live()})
+            if data["action"] != "show":
+                raise ValueError
+            until = time.time() + float(data["seconds"])
+            title, detail = str(data["title"]), str(data.get("detail", ""))
+        except (ValueError, KeyError, TypeError):
+            raise web.HTTPBadRequest() from None
+        return web.json_response({"delivered": await self.show_live(title, until, detail)})
 
     async def _on_alarm_notice(self, request: web.Request) -> web.Response:
         try:

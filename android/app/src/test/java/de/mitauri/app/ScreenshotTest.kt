@@ -1,11 +1,17 @@
 package de.mitauri.app
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import app.cash.paparazzi.DeviceConfig
 import app.cash.paparazzi.Paparazzi
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 
@@ -46,6 +52,27 @@ class ScreenshotTest {
             ),
             null, {}, { _, _ -> },
         )
+    }
+
+    private fun pill(live: LiveCountdown, expanded: Boolean, seconds: Long) = show {
+        Box(Modifier.padding(top = 12.dp).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+            Pill(IslandMode.LIVE, "", true, live, expanded, clock = { live.untilMillis - seconds * 1000 }) {}
+        }
+    }
+
+    private val timer = LiveCountdown("Pizza", 10_000_000L, "")
+    private val leave = LiveCountdown("Losgehen", 10_000_000L, "S 1 ab Pasing um 07:42")
+
+    @Test fun islandCompact() = pill(timer, false, 754)
+    @Test fun islandExpanded() = pill(leave, true, 322)
+    @Test fun islandFinished() = pill(timer, false, 0)
+
+    @Test fun countdownFormats() {
+        assertEquals("Now", countdownText(0))
+        assertEquals("Now", countdownText(-5000))
+        assertEquals("0:01", countdownText(1))
+        assertEquals("12:34", countdownText(754_000))
+        assertEquals("1 h 05", countdownText(3_900_000))
     }
 
     @Test fun settings() = show {

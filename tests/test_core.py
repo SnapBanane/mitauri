@@ -268,6 +268,11 @@ class FakePhone:
     def __init__(self, reachable: bool):
         self.reachable = reachable
         self.sent = []
+        self.live = []
+
+    async def show_live(self, title, until, detail=""):
+        self.live.append((title, detail))
+        return True
 
     async def deliver(self, kind: str, text: str) -> bool:
         self.sent.append((kind, text))
@@ -549,6 +554,7 @@ def test_trip_alert_rechecks_and_schedules_the_real_time(tmp_path, monkeypatch):
     pending = bot._reminders.pending()
     assert len(pending) == 1 and "S 1 ab A um 12:00" in pending[0][1] and pending[0][3] == "message"
     assert bot._phone.sent == []
+    assert bot._phone.live == [("Losgehen", "S 1 ab A um 12:00")]
 
 
 def test_trip_alert_survives_a_timetable_outage(tmp_path, monkeypatch):
@@ -1111,7 +1117,7 @@ def test_all_tools_still_exist_and_discord_only_gets_the_safe_ones(tmp_path):
         env={**os.environ, "MITAURI_DATA_DIR": str(tmp_path), "MITAURI_TOOL_PROFILE": profile},
     ).stdout.split()
     full = run("full")
-    assert len(full) == 39, full
+    assert len(full) == 41, full
     assert sorted(run("limited")) == ["maps_route", "next_departures", "plan_trip", "set_reminder", "think_harder"]
 
 
@@ -1133,6 +1139,20 @@ def test_changing_a_module_restarts_claude_with_the_new_prompt(tmp_path):
 def test_calendar_module_can_reach_google_code():
     from mitauri.modules import calendar
     assert calendar._google().__name__ == "mitauri.google_api"
+
+
+def test_countdown_tool_limits_its_input_and_sets_a_reminder(tmp_path, monkeypatch):
+    monkeypatch.setenv("MITAURI_DATA_DIR", str(tmp_path))
+    sent = []
+    monkeypatch.setattr(toolbox, "ask_server", lambda path, body=None: sent.append(body) or {"delivered": True})
+    assert "error" in tools.start_countdown("Pizza", 0)
+    assert "error" in tools.start_countdown("Pizza", 99_999)
+    assert sent == []
+    tools.start_countdown("T" * 99, 10, detail="D" * 999)
+    assert (len(sent[0]["title"]), len(sent[0]["detail"]), sent[0]["seconds"]) == (30, 200, 600)
+    assert len(Reminders(tmp_path / "reminders.db").pending()) == 1
+    tools.start_countdown("Ohne", 5, remind_at_end=False)
+    assert len(Reminders(tmp_path / "reminders.db").pending()) == 1
 
 
 def test_split_message():

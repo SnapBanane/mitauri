@@ -237,6 +237,8 @@ class MitauriBot(discord.Client):
         if leave <= datetime.now(timezone.utc):
             return bool(self._phone) and await self._phone.deliver("notify", message)
         self._reminders.add(message, leave)
+        if self._phone and modules.is_enabled(self._data_dir, "island"):
+            await self._phone.show_live("Losgehen", leave.timestamp(), trip)
         record(self._data_dir, "trip_rechecked", changed=bool(plan) and trip != alert["trip"])
         return True
 

@@ -148,6 +148,13 @@ PINs, TANs, codes or card numbers aren't kept. Discord chats, photos and tool re
 Mitauri's own replies can repeat parts of them. There's no expiry: delete it all under Settings > Memories and
 privacy. "New chat" doesn't delete it.
 
+## Island
+
+"Stell einen Timer auf 10 Minuten" shows a live countdown in the island at the top of the screen. Tap it to see the
+details or dismiss it. Leave-now alerts show there too. Voice mode takes over for a moment and hands it back. A
+countdown only updates while on screen, and with nothing running, nothing is drawn. It isn't shown over the lock
+screen or saved on the phone, but it comes back when the app reconnects to a running server.
+
 ## Stocks
 
 "Wie steht die SAP-Aktie?" gets a possibly delayed price from Yahoo Finance's public chart data, with no

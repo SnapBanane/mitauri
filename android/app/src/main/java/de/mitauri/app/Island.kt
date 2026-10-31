@@ -28,6 +28,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -35,7 +36,10 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -48,6 +52,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -58,12 +64,25 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import kotlinx.coroutines.delay
 
-enum class IslandMode { LISTENING, THINKING, SPEAKING, MESSAGE }
+enum class IslandMode { LISTENING, THINKING, SPEAKING, MESSAGE, LIVE }
+
+data class LiveCountdown(val title: String, val untilMillis: Long, val detail: String)
+
+fun countdownText(millisLeft: Long): String {
+    val seconds = ((millisLeft + 999) / 1000).coerceAtLeast(0)
+    return when {
+        seconds == 0L -> "Now"
+        seconds >= 3600 -> "%d h %02d".format(seconds / 3600, seconds / 60 % 60)
+        else -> "%d:%02d".format(seconds / 60, seconds % 60)
+    }
+}
 
 /** A status pill around the camera. It only exists while active, so an idle phone draws nothing. */
 object Island {
     private const val EXIT_MILLIS = 220L
+    private const val NOW_HOLD_MILLIS = 60_000L
     private val main = Handler(Looper.getMainLooper())
     private val remove = Runnable { removeView() }
     private var view: View? = null
@@ -75,8 +94,16 @@ object Island {
     val currentMode get() = mode
     val currentText get() = text
 
+    private val expire = Runnable { clearLive() }
+    private var live by mutableStateOf<LiveCountdown?>(null)
+    private var expanded by mutableStateOf(false)
+
     /** While a screen shows this state itself, the pill stays away. */
     var embedded = false
+        set(value) {
+            field = value
+            if (!value && live != null) showLive()
+        }
     private var shown by mutableStateOf(false)
     var level by mutableFloatStateOf(0f)
 
@@ -93,7 +120,33 @@ object Island {
         text = newText
     }
 
+    /** A countdown stays in the pill. Voice takes over for a moment, then hands it back. */
+    fun setLive(context: Context, countdown: LiveCountdown) {
+        app = context.applicationContext
+        live = countdown
+        expanded = false
+        main.removeCallbacks(expire)
+        main.postDelayed(expire, countdown.untilMillis - System.currentTimeMillis() + NOW_HOLD_MILLIS)
+        if (!shown || mode == IslandMode.LIVE) showLive()
+    }
+
+    fun clearLive() {
+        main.removeCallbacks(expire)
+        live = null
+        expanded = false
+        if (mode == IslandMode.LIVE) hide()
+    }
+
+    private fun showLive() {
+        val context = app ?: return
+        show(context, IslandMode.LIVE, "")
+    }
+
     fun hide() {
+        if (live != null && !embedded) {
+            showLive()
+            return
+        }
         shown = false
         main.removeCallbacks(remove)
         main.postDelayed(remove, EXIT_MILLIS)
@@ -105,14 +158,21 @@ object Island {
         val overlayOwner = OverlayOwner()
         val composeView = ComposeView(context).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
-            setContent { Pill(mode, text, shown) { onTap(context) } }
+            setContent {
+                Pill(mode, text, shown, live, expanded, onDismiss = ::clearLive) { onTap(context) }
+            }
         }
         val root = object : FrameLayout(context) {
             // Checked here, before Compose can claim the event for itself.
             override fun dispatchTouchEvent(event: MotionEvent): Boolean {
                 if (event.action == MotionEvent.ACTION_OUTSIDE) {
-                    if (!DoorOpener.cancel() && mode != IslandMode.LISTENING) VoiceMode.stop()
-                    else if (mode == IslandMode.MESSAGE) hide()
+                    if (mode == IslandMode.LIVE) {
+                        expanded = false // A tap elsewhere never stops a countdown.
+                    } else if (!DoorOpener.cancel() && mode != IslandMode.LISTENING) {
+                        VoiceMode.stop()
+                    } else if (mode == IslandMode.MESSAGE) {
+                        hide()
+                    }
                     return true
                 }
                 return super.dispatchTouchEvent(event)
@@ -150,6 +210,10 @@ object Island {
     }
 
     private fun onTap(context: Context) {
+        if (mode == IslandMode.LIVE) {
+            expanded = !expanded
+            return
+        }
         if (DoorOpener.cancel()) {
             hide()
             return
@@ -162,14 +226,23 @@ object Island {
 }
 
 @Composable
-private fun Pill(mode: IslandMode, text: String, shown: Boolean, onTap: () -> Unit) {
+fun Pill(
+    mode: IslandMode,
+    text: String,
+    shown: Boolean,
+    live: LiveCountdown? = null,
+    expanded: Boolean = false,
+    clock: () -> Long = System::currentTimeMillis,
+    onDismiss: () -> Unit = {},
+    onTap: () -> Unit,
+) {
     val scale by animateFloatAsState(
         if (shown) 1f else 0.6f,
         spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
         label = "scale",
     )
     val alpha by animateFloatAsState(if (shown) 1f else 0f, tween(180), label = "alpha")
-    Row(
+    Column(
         Modifier
             .graphicsLayer {
                 scaleX = scale
@@ -181,20 +254,77 @@ private fun Pill(mode: IslandMode, text: String, shown: Boolean, onTap: () -> Un
             .animateContentSize(spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow))
             .widthIn(min = 132.dp, max = 300.dp)
             .padding(horizontal = 16.dp, vertical = 11.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Bars(mode)
-        AnimatedContent(text, transitionSpec = { fadeIn(tween(160)) togetherWith fadeOut(tween(100)) }, label = "text") {
+        if (mode == IslandMode.LIVE && live != null) {
+            LiveContent(live, expanded, clock, onDismiss)
+        } else {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Bars(mode)
+                AnimatedContent(text, transitionSpec = { fadeIn(tween(160)) togetherWith fadeOut(tween(100)) }, label = "text") {
+                    Text(
+                        it,
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        lineHeight = 19.sp,
+                        maxLines = if (mode == IslandMode.MESSAGE) 2 else 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Updates once a second at most, and only while on screen, so it stays cheap on the battery. */
+@Composable
+private fun LiveContent(live: LiveCountdown, expanded: Boolean, clock: () -> Long, onDismiss: () -> Unit) {
+    var now by remember(live) { mutableLongStateOf(clock()) }
+    LaunchedEffect(live) {
+        while (now < live.untilMillis) {
+            delay(1000 - (now % 1000).coerceAtMost(999))
+            now = clock()
+        }
+    }
+    val left = live.untilMillis - now
+    val colour = if (left <= 0) MitauriColors.Warning else MitauriColors.Accent
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Canvas(Modifier.size(9.dp)) { drawCircle(colour) }
+        Text(
+            live.title,
+            Modifier.widthIn(max = 150.dp),
+            color = Color.White,
+            fontSize = 14.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            countdownText(left),
+            color = colour,
+            style = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.SemiBold, fontFeatureSettings = "tnum"),
+        )
+    }
+    if (expanded) {
+        if (live.detail.isNotBlank()) {
             Text(
-                it,
-                color = Color.White,
-                fontSize = 14.sp,
-                lineHeight = 19.sp,
-                maxLines = if (mode == IslandMode.MESSAGE) 2 else 1,
+                live.detail,
+                Modifier.padding(top = 8.dp),
+                color = MitauriColors.Muted,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+                maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        Text(
+            "Dismiss",
+            Modifier.padding(top = 10.dp).clickable(onClick = onDismiss).padding(vertical = 2.dp),
+            color = MitauriColors.AccentSoft,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+        )
     }
 }
 
@@ -207,7 +337,7 @@ private fun Bars(mode: IslandMode) {
         IslandMode.LISTENING -> MitauriColors.Success
         IslandMode.THINKING -> MitauriColors.Accent
         IslandMode.SPEAKING -> MitauriColors.AccentSoft
-        IslandMode.MESSAGE -> MitauriColors.Warning
+        IslandMode.MESSAGE, IslandMode.LIVE -> MitauriColors.Warning
     }
     Canvas(Modifier.size(width = 26.dp, height = 22.dp)) {
         val shapes = listOf(0.55f, 1f, 0.7f, 0.9f)
@@ -217,7 +347,7 @@ private fun Bars(mode: IslandMode) {
             val energy = when (mode) {
                 IslandMode.LISTENING -> 0.25f + 0.75f * Island.level
                 IslandMode.THINKING, IslandMode.SPEAKING -> 0.3f + 0.7f * ((pulse + index * 0.3f) % 1f)
-                IslandMode.MESSAGE -> 0.45f
+                IslandMode.MESSAGE, IslandMode.LIVE -> 0.45f
             }
             val height = (size.height * shape * energy).coerceAtLeast(barWidth)
             drawRoundRect(

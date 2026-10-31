@@ -432,6 +432,32 @@ def test_modules_are_changed_only_by_the_paired_phone_and_door_commands_follow_t
     with_api(test, tmp_path)
 
 
+def test_countdown_reaches_the_phone_and_returns_after_reconnecting(tmp_path):
+    async def test(session):
+        body = {"action": "show", "title": "Pizza", "seconds": 600, "detail": "Ofen"}
+        assert (await session.post(f"{BASE}/island", json=body)).status == 401
+        assert (await session.post(f"{BASE}/island", json={"action": "x"}, headers=INTERNAL)).status == 400
+        async with connect(session) as socket:
+            request = asyncio.create_task(session.post(f"{BASE}/island", json=body, headers=INTERNAL))
+            event = await socket.receive_json()
+            assert (event["type"], event["text"], event["detail"]) == ("live_show", "Pizza", "Ofen")
+            assert 590 < event["until"] - time.time() <= 601
+            await socket.send_json({"type": "ack", "id": event["id"]})
+            assert (await (await request).json())["delivered"] is True
+        async with connect(session) as socket:
+            again = await socket.receive_json()
+            assert (again["type"], again["text"]) == ("live_show", "Pizza")
+            request = asyncio.create_task(session.post(f"{BASE}/island", json={"action": "clear"}, headers=INTERNAL))
+            cleared = await socket.receive_json()
+            assert cleared["type"] == "live_clear"
+            await socket.send_json({"type": "ack", "id": cleared["id"]})
+            await request
+        async with connect(session) as socket:
+            await socket.send_json({"type": "message", "id": "1", "text": "hi"})
+            assert (await socket.receive_json())["type"] == "reply"  # no countdown comes back
+    with_api(test, tmp_path)
+
+
 def test_voice_returns_transcript_and_reply(tmp_path):
     async def test(session):
         response = await session.post(f"{BASE}/voice", data=b"audio", headers=signed("POST", "/voice", b"audio"))
