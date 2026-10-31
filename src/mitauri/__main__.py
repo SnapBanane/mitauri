@@ -15,7 +15,10 @@ from .config import API_PORT, load_config, new_token
 from .memory import Memory
 from .presence import Presence, load_key
 from .reminders import Reminders
-from .speech import Speech
+from .chat_memory import MODEL as SEARCH_MODEL
+from .speech import VOICES, WHISPER_THREADS, Speech
+
+log = logging.getLogger(__name__)
 
 
 def main() -> None:
@@ -39,7 +42,7 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config()
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s" if args.command == "run" else None)
 
     if args.command == "pair":
         host = os.environ.get("MITAURI_API_HOST")
@@ -121,6 +124,11 @@ def main() -> None:
     if not token or not user_id:
         raise SystemExit("Set MITAURI_DISCORD_TOKEN and MITAURI_DISCORD_USER_ID in secrets.env first.")
     reminders = Reminders(config.data_dir / "reminders.db")
+    # Discord voice isn't used, and request logs are just noise.
+    logging.getLogger("discord.client").setLevel(logging.ERROR)
+    logging.getLogger("discord.state").setLevel(logging.ERROR)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    log.info(startup_summary(config, os.environ.get("MITAURI_WHISPER_MODEL", "small"), WHISPER_THREADS))
     speech = Speech(config.data_dir)
     speech.preload()
     new_token(config.data_dir)
@@ -181,6 +189,28 @@ def review_proposal(action: str, proposal_id: str | None) -> None:
         for name in applied:
             print("changed", name)
         print("Run the tests, then restart Mitauri.")
+
+
+def startup_summary(config, whisper_model: str, whisper_threads: int) -> str:
+    """What's in use, for the log when the server starts. It shows settings only, never a secret."""
+    enabled = [m["name"] for m in modules.listing(config.data_dir) if m["enabled"]]
+    disabled = [m["name"] for m in modules.listing(config.data_dir) if not m["enabled"]]
+    language = os.environ.get("MITAURI_SPEECH_LANGUAGE", "de")
+    wake_settings = wake.load_settings(config.data_dir)
+    lines = [
+        "Mitauri is starting",
+        f"  Chat model:      {config.model}",
+        f"  Hard problems:   {config.thinking_model}",
+        f"  Self-building:   {os.environ.get('MITAURI_PROPOSAL_MODEL', 'opus')}",
+        f"  Speech to text:  Whisper {whisper_model}, {whisper_threads} threads, language {language}",
+        f"  Voices:          {', '.join(name for _, name in VOICES.values())}",
+        f"  Memory search:   {SEARCH_MODEL.split('/')[-1]} (loads on first search)",
+        f"  Wake-up alarm:   {'on' if wake_settings['enabled'] else 'off'}",
+        f"  Modules on:      {', '.join(enabled)}",
+    ]
+    if disabled:
+        lines.append(f"  Modules off:     {', '.join(disabled)}")
+    return "\n".join(lines)
 
 
 async def ask_once(brain: Brain, message: str) -> str:

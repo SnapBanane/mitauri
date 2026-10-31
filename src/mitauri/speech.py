@@ -49,7 +49,7 @@ class Speech:
                     self._load_detector()
                 for language in VOICES:
                     self._load_voice(language)
-            log.info("Speech models ready")
+            log.info("Speech models ready: Whisper %s and %s", os.environ.get("MITAURI_WHISPER_MODEL", "small"), ", ".join(name for _, name in VOICES.values()))
         except Exception:
             log.exception("Couldn't load the speech models; will retry on first use")
 

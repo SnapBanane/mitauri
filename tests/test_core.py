@@ -25,6 +25,7 @@ from mitauri import toolbox
 from mitauri.modules import places as places_module
 from mitauri import geo, proposals, research, stocks, tools, transit, untis, wake, wake_planner, weather
 from mitauri import modules
+from mitauri.__main__ import startup_summary
 from mitauri.chat_memory import ChatMemory
 from mitauri import presence as presence_module
 from mitauri.transit import best_trip, describe_trip, parse_departures
@@ -1153,6 +1154,16 @@ def test_countdown_tool_limits_its_input_and_sets_a_reminder(tmp_path, monkeypat
     assert len(Reminders(tmp_path / "reminders.db").pending()) == 1
     tools.start_countdown("Ohne", 5, remind_at_end=False)
     assert len(Reminders(tmp_path / "reminders.db").pending()) == 1
+
+
+def test_startup_summary_shows_what_is_in_use_and_no_secrets(tmp_path, monkeypatch):
+    monkeypatch.setenv("MITAURI_DISCORD_TOKEN", "secret-token-value")
+    modules.set_enabled(tmp_path, "stocks", False)
+    config = Config(data_dir=tmp_path, timezone="Europe/Berlin", model="haiku", claude_bin="claude")
+    summary = startup_summary(config, "small", 8)
+    assert "haiku" in summary and "sonnet" in summary and "Whisper small, 8 threads" in summary
+    assert "de_DE-thorsten-high" in summary and "Modules off:     stocks" in summary
+    assert "secret-token-value" not in summary
 
 
 def test_split_message():
