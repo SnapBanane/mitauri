@@ -162,6 +162,12 @@ Its bars follow the music, using only how strong the bass to treble are at that 
 off. Voice and countdowns take priority. This reads Spotify's media session through the app's notification access, so it
 needs no account or Spotify API, and nothing about the song leaves the phone.
 
+The island needs one thing switched on: Settings > Accessibility > Mitauri Island, or the Island item in the app's
+setup. Android keeps normal "over other apps" windows under the status bar, where they never get taps, and it shows a
+notice for them. The accessibility kind sits above it with no notice. Mitauri Island asks for no events and no window
+content, so it can't read your screen, and the pill still hides on the lock screen. Without it, the pill still
+shows, but tapping it doesn't work.
+
 The pill reads the camera's position from Android and leaves that space free, moving longer text below it.
 
 ## Stocks

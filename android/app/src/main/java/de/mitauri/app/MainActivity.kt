@@ -266,8 +266,8 @@ class MainActivity : FragmentActivity() {
             SetupItem("Microphone", "For voice mode", granted(Manifest.permission.RECORD_AUDIO)) {
                 askPermissions.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
             },
-            SetupItem("Island", "Allow display over other apps", Settings.canDrawOverlays(this)) {
-                openSettings(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+            SetupItem("Island", "Turn on Mitauri Island under Accessibility. It reads nothing on your screen", IslandService.instance != null) {
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             },
             SetupItem("Stay active in the background", "Set battery use to unrestricted", power.isIgnoringBatteryOptimizations(packageName)) {
                 openSettings(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)

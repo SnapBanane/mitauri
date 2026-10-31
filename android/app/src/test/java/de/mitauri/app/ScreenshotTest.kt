@@ -77,7 +77,10 @@ class ScreenshotTest {
     private val song = NowPlaying("Bohemian Rhapsody - Remastered 2011", "Queen", null, true)
 
     @Test fun islandMusic() = onScreen { Pill(IslandMode.MUSIC, "", true, music = song, camera = camera) {} }
-    @Test fun islandMusicExpanded() = onScreen { Pill(IslandMode.MUSIC, "", true, expanded = true, music = song, camera = camera) {} }
+    @Test fun islandMusicExpanded() = onScreen {
+        val paused = song.copy(playing = false, accent = Color(0xFFE79AD8), positionMillis = 98_000, durationMillis = 354_000)
+        Pill(IslandMode.MUSIC, "", true, expanded = true, music = paused, camera = camera) {}
+    }
     @Test fun islandListening() = onScreen { Pill(IslandMode.LISTENING, "Listening", true, camera = camera) {} }
     @Test fun islandMessage() = onScreen { Pill(IslandMode.MESSAGE, "Opening door, tap to cancel", true, camera = camera) {} }
 
@@ -87,6 +90,22 @@ class ScreenshotTest {
     @Test fun islandCompact() = pill(timer, false, 754)
     @Test fun islandExpanded() = pill(leave, true, 322)
     @Test fun islandFinished() = pill(timer, false, 0)
+
+    @Test fun aBeatStandsOutFromSteadySound() {
+        val meter = BandMeter()
+        repeat(200) { meter.level(20.0) }
+        val steady = meter.level(20.0)
+        val beat = meter.level(40.0)
+        assert(steady < 0.2f) { "steady was $steady" }
+        assert(beat > 0.8f) { "beat was $beat" }
+        repeat(600) { meter.level(0.0) }
+        assertEquals(0f, meter.level(0.0), 0.01f)
+    }
+
+    @Test fun songTimes() {
+        assertEquals("0:00", songTime(-5))
+        assertEquals("5:54", songTime(354_000))
+    }
 
     @Test fun countdownFormats() {
         assertEquals("Now", countdownText(0))
