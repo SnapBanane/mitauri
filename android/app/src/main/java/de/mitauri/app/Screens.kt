@@ -296,6 +296,7 @@ fun MemoryScreen(onBack: () -> Unit) {
     var message by remember { mutableStateOf<String?>(null) }
     var confirmForget by remember { mutableStateOf<Memory?>(null) }
     var confirmNew by remember { mutableStateOf(false) }
+    var confirmClear by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     suspend fun reload() {
         try {
@@ -326,6 +327,27 @@ fun MemoryScreen(onBack: () -> Unit) {
             dismissButton = { TextButton(onClick = { confirmForget = null }) { Text("Cancel") } },
         )
     }
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("Delete long-term memory?") },
+            text = { Text("All past chats kept for searching are deleted from the server. This can't be undone. Saved memories above stay.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmClear = false
+                    scope.launch {
+                        message = try {
+                            withContext(Dispatchers.IO) { Mitauri.clearLongTermMemory() }
+                            "Long-term memory deleted."
+                        } catch (_: Exception) {
+                            "The server can't be reached right now."
+                        }
+                    }
+                }) { Text("Delete", color = MitauriColors.Danger) }
+            },
+            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
+        )
+    }
     if (confirmNew) {
         NewChatDialog({ confirmNew = false }) { message = "New chat started. The old history is deleted." }
     }
@@ -351,7 +373,11 @@ fun MemoryScreen(onBack: () -> Unit) {
             }
         }
         SectionLabel("History")
-        Group { ListRow("New chat", "Deletes the history on this phone and the conversation on the server", R.drawable.ic_new_chat, onClick = { confirmNew = true }) }
+        Group {
+            ListRow("New chat", "Deletes the history on this phone and the conversation on the server", R.drawable.ic_new_chat, onClick = { confirmNew = true })
+            Divider()
+            ListRow("Delete long-term memory", "Past chats kept so Mitauri can search them", R.drawable.ic_lock, titleColor = MitauriColors.Danger, onClick = { confirmClear = true })
+        }
     }
 }
 

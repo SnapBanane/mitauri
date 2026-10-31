@@ -67,14 +67,19 @@ def mark_fired(data_dir: Path, day: date) -> None:
     (data_dir / FIRED_FILE).write_text(day.isoformat())
 
 
-def next_wake(firsts: dict[date, int], now: datetime, minutes_before: int, fired: date | None = None) -> dict | None:
-    """The next wake-up still to come, or one just missed by less than the fire window."""
+def next_wake(firsts: dict[date, int], now: datetime, minutes_before: int, fired: date | None = None, chosen: dict | None = None) -> dict | None:
+    """The next wake-up still to come, or one just missed by less than the fire window. chosen holds times
+    worked out from the user's own rules, by day, and the plain setting covers any day without one."""
     for day in sorted(firsts):
         if day < now.date() or day == fired:
             continue
         start = firsts[day]
         lesson = datetime(day.year, day.month, day.day, start // 100, start % 100, tzinfo=now.tzinfo)
         wake = lesson - timedelta(minutes=minutes_before)
+        plan = (chosen or {}).get(day.isoformat())
+        if plan and plan.get("first") == start:
+            hour, minute = map(int, plan["wake"].split(":"))
+            wake = lesson.replace(hour=hour, minute=minute)
         if wake >= now - timedelta(minutes=FIRE_WINDOW_MINUTES):
             return {"day": day, "lesson": lesson, "wake": wake}
     return None

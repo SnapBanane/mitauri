@@ -407,6 +407,14 @@ def test_alarm_notice_reaches_the_phone_and_needs_the_internal_token(tmp_path):
     with_api(test, tmp_path)
 
 
+def test_long_term_memory_can_only_be_cleared_by_the_phone(tmp_path):
+    async def test(session):
+        assert (await session.delete(f"{BASE}/long-term-memory", headers=INTERNAL)).status == 401
+        path = "/long-term-memory"
+        assert (await session.delete(f"{BASE}{path}", headers=signed("DELETE", path))).status == 200
+    with_api(test, tmp_path)
+
+
 def test_voice_returns_transcript_and_reply(tmp_path):
     async def test(session):
         response = await session.post(f"{BASE}/voice", data=b"audio", headers=signed("POST", "/voice", b"audio"))

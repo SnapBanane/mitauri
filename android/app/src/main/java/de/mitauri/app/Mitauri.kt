@@ -168,6 +168,13 @@ object Mitauri {
     }
 
     /** Call off the main thread. */
+    fun clearLongTermMemory() {
+        slowClient.newCall(signedRequest("long-term-memory", "DELETE", ByteArray(0)).build()).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("Server returned ${response.code}")
+        }
+    }
+
+    /** Call off the main thread. */
     fun resetConversation() {
         slowClient.newCall(signedRequest("conversation/reset", "POST", ByteArray(0)).build()).execute().close()
     }

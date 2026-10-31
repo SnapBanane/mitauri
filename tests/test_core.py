@@ -20,7 +20,8 @@ from mitauri.bot import MAX_MESSAGE_LENGTH, MitauriBot, briefing_due, is_from_ow
 from mitauri.reminders import CALL, TRIP, Reminders
 from mitauri.tools import route_url
 from mitauri.brain import Brain, BrainError, prune_transcripts, transcript_dir
-from mitauri import geo, proposals, research, stocks, tools, transit, untis, wake, weather
+from mitauri import geo, proposals, research, stocks, tools, transit, untis, wake, wake_planner, weather
+from mitauri.chat_memory import ChatMemory
 from mitauri import presence as presence_module
 from mitauri.transit import best_trip, describe_trip, parse_departures
 from mitauri.config import Config, load_token, lock_down, move_secrets, new_token
@@ -970,6 +971,78 @@ def test_finding_the_speaker_retries_and_remembers_its_address(tmp_path, monkeyp
     answers.extend([[], []])
     with pytest.raises(OSError, match="wasn't found"):
         wake.find_speaker("Schlafzimmer", tmp_path, attempts=2)
+
+
+def fake_vectors(texts):
+    """Stands in for the model: similar words give similar vectors."""
+    vocabulary = ["urlaub", "italien", "bus", "tee"]
+    vectors = np.array([[t.lower().count(w) + 0.01 for w in vocabulary] for t in texts], dtype=np.float32)
+    return vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
+
+
+def test_long_term_memory_finds_by_vector_and_can_be_cleared(tmp_path):
+    memory = ChatMemory(tmp_path / "chat.db", embed=fake_vectors)
+    assert memory.search("urlaub") == []
+    assert memory.add("Urlaub in Italien", "Schön!")
+    assert memory.add("Wann kommt der Bus?", "Um 8.")
+    found = memory.search("urlaub italien")
+    assert found[0]["you_said"] == "Urlaub in Italien" and len(found) == 1
+    memory.clear()
+    assert memory.count() == 0 and memory.search("urlaub") == []
+    assert b"Italien" not in (tmp_path / "chat.db").read_bytes()
+
+
+def test_long_term_memory_never_keeps_passwords_or_codes(tmp_path):
+    memory = ChatMemory(tmp_path / "chat.db", embed=fake_vectors)
+    assert not memory.add("Mein Passwort ist abc123", "Okay")
+    assert not memory.add("hallo", "Deine TAN ist 123456")
+    assert memory.count() == 0
+
+
+def test_a_wake_decision_can_only_be_that_morning_before_the_first_lesson():
+    good = wake_planner.parse_decision('Sure: {"wake": "06:50", "why": "HGH"}', 800)
+    assert good == {"wake": "06:50", "why": "HGH"}
+    for bad in ('{"wake": "08:30"}', '{"wake": "03:00"}', '{"wake": "25:00"}', '{"wake": "soon"}', "no json", '{"why": "x"}', "{broken"):
+        assert wake_planner.parse_decision(bad, 800) is None, bad
+
+
+def test_chosen_wake_time_wins_only_while_the_first_lesson_still_matches():
+    firsts = {date(2026, 11, 2): 800}
+    evening = datetime(2026, 11, 1, 20, 0, tzinfo=BERLIN)
+    chosen = {"2026-11-02": {"wake": "06:50", "first": 800}}
+    assert wake.next_wake(firsts, evening, 90, chosen=chosen)["wake"].strftime("%H:%M") == "06:50"
+    moved = {"2026-11-02": {"wake": "06:50", "first": 755}}
+    assert wake.next_wake(firsts, evening, 90, chosen=moved)["wake"].strftime("%H:%M") == "06:30"
+
+
+def test_plan_asks_again_only_when_something_changed_and_failure_keeps_the_setting(tmp_path, monkeypatch):
+    phone = FakePhone(True)
+    bot, _ = bot_with_phone(tmp_path, phone)
+    bot._facts = Memory(tmp_path / "memory.db")
+    bot._facts.add("Wecker 6:50")
+    today = datetime.now(BERLIN).date()
+    number = int(today.strftime("%Y%m%d"))
+    bot._first_lessons = {today: 2300}
+    asks = []
+    answers = [None, {"wake": "22:00", "why": "Regel"}, {"wake": "22:00", "why": "Regel"}]
+    monkeypatch.setattr(wake_planner, "decide", lambda *a: asks.append(1) or answers.pop(0))
+    lessons = [lesson(number, 2300)]
+    settings = wake.load_settings(tmp_path)
+    now = datetime.now(BERLIN)
+    asyncio.run(bot._plan_next_wake(lessons, now, settings))
+    assert wake_planner.load_plans(tmp_path) == {} and phone.sent == []
+    asyncio.run(bot._plan_next_wake(lessons, now, settings))
+    assert wake_planner.load_plans(tmp_path)[today.isoformat()]["wake"] == "22:00"
+    assert len(phone.sent) == 1 and "22:00" in phone.sent[0][1]
+    asyncio.run(bot._plan_next_wake(lessons, now, settings))
+    assert len(asks) == 2
+    bot._facts.add("Neue Regel")
+    asyncio.run(bot._plan_next_wake(lessons, now, settings))
+    assert len(asks) == 3 and len(phone.sent) == 1  # asked again, but the same time isn't news
+
+
+def test_long_term_memory_is_not_on_discord():
+    assert "search_past_chats" not in tools.LIMITED_TOOLS
 
 
 def test_split_message():

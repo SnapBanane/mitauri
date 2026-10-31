@@ -121,7 +121,10 @@ Add your WebUntis login to `secrets.env`, as `MITAURI_WEBUNTIS_SERVER`, `_SCHOOL
 "Was habe ich morgen?" reads the timetable. A refused login isn't retried until you change it, as repeated
 failures could lock your school account.
 
-"Weck mich 90 Minuten vor der ersten Stunde" turns on the wake-up. It skips cancelled lessons, and rechecks every
+"Weck mich 90 Minuten vor der ersten Stunde" turns on the wake-up. Tell Mitauri your own rules, like "wenn ich zur
+ersten Stunde muss, stell den Wecker auf 6:50", and it saves them. Whenever they or the timetable change, a small
+Haiku request picks the time from those rules. It can only pick a time that morning before the first lesson, and
+you get a notification when it changes. If that fails, the minutes-before setting applies. It skips cancelled lessons, and rechecks every
 30 minutes. Google has no public alarm API for Nest, so it plays an alarm tone and spoken audio on the speaker over
 Wi-Fi, repeating for up to 5 minutes. To stop it, use Stop on the phone's notification, say or type "Stopp", say
 "Hey Google, stopp", or run `mitauri wake-stop`. The phone rings 3 minutes in, or straight away if the speaker
@@ -130,6 +133,14 @@ while the server is running on the same Wi-Fi as the speaker, so keep a phone al
 The speaker fetches the audio from this machine on port 8767, which is open only while the alarm plays and
 serves one secret address. If you use a firewall, allow that port from your own network, such as
 `sudo ufw allow from 192.168.0.0/16 to any port 8767 proto tcp`. Try the speaker with `mitauri wake-test`.
+
+## Long-term memory
+
+Mitauri keeps your app and voice chats so it can search them by meaning: "Was hatte ich letzte Woche über den Urlaub
+gesagt?" The search model runs locally, and only what a search finds goes to Claude. Messages mentioning passwords,
+PINs, TANs, codes or card numbers aren't kept. Discord chats, photos and tool results aren't kept either, though
+Mitauri's own replies can repeat parts of them. There's no expiry: delete it all under Settings > Memories and
+privacy. "New chat" doesn't delete it.
 
 ## Stocks
 

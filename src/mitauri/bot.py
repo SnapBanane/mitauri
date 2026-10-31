@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 import discord
 
-from . import proposals, research, transit, untis, wake, weather
+from . import proposals, research, transit, untis, wake, wake_planner, weather
 from .audit import record
 from .brain import Brain, BrainError
 from .config import Config
@@ -18,6 +18,7 @@ CHECK_INTERVAL_SECONDS = 5
 MAX_CALL_LATENESS_SECONDS = 900
 TIMETABLE_CHECK_SECONDS = 1800
 PHONE_BACKUP_DELAY_SECONDS = 180
+PLAN_DAYS_AHEAD = 2
 BRIEFING_WINDOW = timedelta(hours=3)  # a much later briefing is no use, so skip that day
 BRIEFING_PROMPT = (
     "Give me my morning briefing: today's calendar events and my open tasks, especially any due "
@@ -42,7 +43,7 @@ def briefing_due(now: datetime, at: time, last_date: str | None) -> bool:
 
 
 class MitauriBot(discord.Client):
-    def __init__(self, owner_id: int, brain: Brain, reminders: Reminders, config: Config, phone=None, briefing_brain=None, speech=None):
+    def __init__(self, owner_id: int, brain: Brain, reminders: Reminders, config: Config, phone=None, briefing_brain=None, speech=None, facts=None):
         # Direct messages to a bot include their text without any privileged intent.
         intents = discord.Intents.none()
         intents.dm_messages = True
@@ -52,6 +53,7 @@ class MitauriBot(discord.Client):
         self._reminders = reminders
         self._phone = phone
         self._speech = speech
+        self._facts = facts
         self._first_lessons = {}
         self._next_timetable_check = 0.0
         self._warned_timetable = False
@@ -135,6 +137,7 @@ class MitauriBot(discord.Client):
             try:
                 lessons = await asyncio.to_thread(untis.upcoming, self._data_dir, now.date())
                 self._first_lessons = untis.first_lessons(lessons)
+                await self._plan_next_wake(lessons, now, settings)
             except (untis.UntisError, OSError, ValueError, KeyError, TypeError) as error:
                 # An older timetable is still better than no alarm, and failing silently isn't an option.
                 log.warning("Couldn't update the timetable: %s", error)
@@ -143,12 +146,36 @@ class MitauriBot(discord.Client):
             else:
                 self._warned_timetable = False
         fired = now.date() if wake.already_fired(self._data_dir, now.date()) else None
-        plan = wake.next_wake(self._first_lessons, now, settings["minutes_before"], fired)
+        chosen = wake_planner.load_plans(self._data_dir)
+        plan = wake.next_wake(self._first_lessons, now, settings["minutes_before"], fired, chosen)
         if plan and plan["day"] == now.date() and plan["wake"] <= now:
             wake.mark_fired(self._data_dir, now.date())
             record(self._data_dir, "school_wake")
             task = asyncio.create_task(self._sound_school_wake(plan, settings))
             self._wake_task = task
+
+    async def _plan_next_wake(self, lessons: list[dict], now: datetime, settings: dict) -> None:
+        """Asks only when something that matters changed, so it costs about one small request a day."""
+        upcoming = [d for d in sorted(self._first_lessons) if d >= now.date() and (d - now.date()).days <= PLAN_DAYS_AHEAD]
+        if not upcoming or self._facts is None:
+            return
+        day = upcoming[0]
+        first = self._first_lessons[day]
+        facts = [text for _, text in self._facts.all()]
+        details = wake_planner.active_day(lessons, day)
+        key = wake_planner.plan_key(first, facts, details)
+        saved = wake_planner.load_plans(self._data_dir).get(day.isoformat())
+        if saved and saved.get("key") == key:
+            return
+        decision = await asyncio.to_thread(
+            wake_planner.decide, day, first, details, facts, settings["minutes_before"], self._data_dir,
+        )
+        if decision is None:  # keeps the plain setting, and tries again at the next check
+            log.warning("Couldn't work out a wake-up time from the rules")
+            return
+        wake_planner.save_plan(self._data_dir, day, {**decision, "first": first, "key": key})
+        if not (saved and saved.get("wake") == decision["wake"]) and self._phone:
+            await self._phone.deliver("notify", f"Wecker am {day.strftime('%d.%m.')}: {decision['wake']} Uhr. {decision['why']}")
 
     async def _sound_school_wake(self, plan: dict, settings: dict) -> None:
         text = wake.alarm_text(plan["lesson"])

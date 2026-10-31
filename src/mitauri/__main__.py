@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 from . import proposals, wake
 from .api import Api, load_token
 from .auth import Devices
+from .chat_memory import ChatMemory
 from .brain import Brain, BrainError, prune_transcripts
 from .config import API_PORT, load_config, new_token
 from .memory import Memory
@@ -110,8 +111,9 @@ def main() -> None:
     prune_transcripts(config.data_dir, {session.read_text()} if session.exists() else set())
     presence = Presence(load_key(config.data_dir))
     presence.watch_serial(os.environ.get("MITAURI_PRESENCE_PORT", "/dev/ttyUSB0"))
-    api = Api(brain, load_token(config.data_dir), config.data_dir, speech, memory, presence)
-    bot = MitauriBot(int(user_id), Brain(config, memory, limited=True), reminders, config, api, brain, speech)
+    history = ChatMemory(config.data_dir / "chat_memory.db")
+    api = Api(brain, load_token(config.data_dir), config.data_dir, speech, memory, presence, history)
+    bot = MitauriBot(int(user_id), Brain(config, memory, limited=True), reminders, config, api, brain, speech, memory)
     try:
         asyncio.run(serve(bot, token, api, brain))
     except KeyboardInterrupt:

@@ -96,7 +96,8 @@ class SentenceSplitter:
 
 
 class Api:
-    def __init__(self, brain, internal_token: str, data_dir, speech=None, memory=None, presence=None):
+    def __init__(self, brain, internal_token: str, data_dir, speech=None, memory=None, presence=None, history=None):
+        self._history = history
         self._presence = presence
         self._brain = brain
         self._internal_token = internal_token
@@ -129,6 +130,7 @@ class Api:
         app.router.add_get("/memories", self._on_list_memories)
         app.router.add_delete("/memories/{id:[0-9]+}", self._on_delete_memory)
         app.router.add_post("/conversation/reset", self._on_reset_conversation)
+        app.router.add_delete("/long-term-memory", self._on_clear_history)
         self._runner = web.AppRunner(app, access_log=None)  # who asked what is nobody's log's business
         await self._runner.setup()
         for host in hosts:
@@ -190,6 +192,18 @@ class Api:
         record(self._data_dir, "memory_deleted", removed=removed)
         return web.json_response({"removed": removed})
 
+    async def _on_clear_history(self, _: web.Request) -> web.Response:
+        if self._history:
+            await asyncio.to_thread(self._history.clear)
+        record(self._data_dir, "long_term_memory_cleared")
+        return web.json_response({"cleared": True})
+
+    def _remember(self, you: str, reply: str) -> None:
+        if self._history and reply:
+            task = asyncio.create_task(asyncio.to_thread(self._history.add, you, reply))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+
     async def _on_reset_conversation(self, _: web.Request) -> web.Response:
         self._brain.reset()
         record(self._data_dir, "conversation_reset")
@@ -242,6 +256,7 @@ class Api:
             return
         try:
             reply = await self._brain.ask(text)
+            self._remember(text, reply)
         except BrainError as error:
             reply = f"Something went wrong: {error}"
         if not socket.closed:
@@ -305,6 +320,7 @@ class Api:
                         await phone.send({"sentence": sentence})
                 for sentence in splitter.flush():
                     await phone.send({"sentence": sentence})
+                self._remember(transcript, reply.strip())
             except BrainError as error:
                 reply = f"Something went wrong: {error}"
                 await phone.send({"sentence": reply})
