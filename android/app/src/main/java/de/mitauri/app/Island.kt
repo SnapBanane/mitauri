@@ -8,6 +8,7 @@ import android.graphics.Point
 import android.hardware.display.DisplayManager
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.Settings
 import android.view.Display
 import android.view.Gravity
@@ -33,6 +34,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
@@ -62,6 +64,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -90,10 +93,15 @@ data class CameraHole(val width: Dp, val centerY: Dp) {
     }
 }
 
-private val PILL_TOP = 2.dp
+private val PILL_MIN_TOP = 2.dp
+private val PILL_EDGE = 6.dp
 private val ROW_HEIGHT = 22.dp
-private val CAMERA_MARGIN = 6.dp
+private val MUSIC_TITLE_WIDTH = 58.dp // Leaves the status bar icons on both sides uncovered.
+private val CAMERA_MARGIN = 2.dp
 private const val NOW_HOLD_MILLIS = 60_000L
+
+// Android's box for the camera on this phone ends above the real hole, which is level with the status bar icons.
+private const val HOLE_BELOW_BOX_PIXELS = 32
 
 fun countdownText(millisLeft: Long): String {
     val seconds = ((millisLeft + 999) / 1000).coerceAtLeast(0)
@@ -238,7 +246,7 @@ object Island {
             override fun onConfigurationChanged(newConfig: Configuration) {
                 super.onConfigurationChanged(newConfig)
                 val params = layoutParams as? WindowManager.LayoutParams ?: return
-                params.x = locateCamera(context)
+                placeOnCamera(context, params)
                 context.getSystemService(WindowManager::class.java).updateViewLayout(this, params)
             }
         }.apply {
@@ -258,12 +266,17 @@ object Island {
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-            x = locateCamera(context)
-            y = (PILL_TOP.value * context.resources.displayMetrics.density).toInt()
+            placeOnCamera(context, this)
         }
         context.getSystemService(WindowManager::class.java).addView(root, params)
         view = root
         owner = overlayOwner
+    }
+
+    private fun placeOnCamera(context: Context, params: WindowManager.LayoutParams) {
+        params.x = locateCamera(context)
+        val top = (camera.centerY - ROW_HEIGHT / 2 - PILL_EDGE).coerceAtLeast(PILL_MIN_TOP)
+        params.y = (top.value * context.resources.displayMetrics.density).toInt()
     }
 
     /** Remembers where the camera is and returns how far the pill must move sideways to sit on it. */
@@ -275,7 +288,7 @@ object Island {
             camera = CameraHole.NONE
             return 0
         }
-        camera = CameraHole((hole.width() / density).dp, (hole.centerY() / density).dp)
+        camera = CameraHole((hole.width() / density).dp, ((hole.centerY() + HOLE_BELOW_BOX_PIXELS) / density).dp)
         return hole.centerX() - Point().also { @Suppress("DEPRECATION") display.getRealSize(it) }.x / 2
     }
 
@@ -325,8 +338,7 @@ fun Pill(
     )
     val alpha by animateFloatAsState(if (shown) 1f else 0f, tween(180), label = "alpha")
     // The row sits level with the camera, and anything longer goes below it.
-    val edge = (camera.centerY - PILL_TOP - ROW_HEIGHT / 2).coerceAtLeast(0.dp)
-    val below = (camera.centerY - ROW_HEIGHT / 2).coerceAtLeast(0.dp) + 4.dp
+    val below = 6.dp
     Column(
         Modifier
             .graphicsLayer {
@@ -339,7 +351,7 @@ fun Pill(
             .clickable(onClick = onTap)
             .animateContentSize(spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow))
             .widthIn(min = 132.dp, max = 300.dp)
-            .padding(start = 16.dp, end = 16.dp, top = edge, bottom = edge),
+            .padding(start = 12.dp, end = 12.dp, top = PILL_EDGE, bottom = PILL_EDGE),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         when {
@@ -464,14 +476,14 @@ private fun MusicContent(music: NowPlaying, expanded: Boolean, camera: CameraHol
         camera,
         {
             music.art?.let {
-                Image(it, null, Modifier.padding(end = 8.dp).size(20.dp).clip(RoundedCornerShape(5.dp)), contentScale = ContentScale.Crop)
+                Image(it, null, Modifier.size(20.dp).clip(RoundedCornerShape(5.dp)), contentScale = ContentScale.Crop)
             }
-            if (!expanded) Label(music.title)
         },
         {
-            MusicBars(music.playing)
-            if (!expanded) {
-                Label(music.artist.ifBlank { " " }, MitauriColors.Muted)
+            if (expanded) {
+                MusicBars(music.playing)
+            } else {
+                Box(Modifier.widthIn(max = MUSIC_TITLE_WIDTH)) { Label(music.title) }
             }
         },
     )
@@ -495,24 +507,34 @@ private fun MusicContent(music: NowPlaying, expanded: Boolean, camera: CameraHol
     }
 }
 
-/** Steps a few times a second instead of every frame, because music can play for hours. */
+/** Follows the music, and rests while the screen is off, because music can play for hours. */
 @Composable
 private fun MusicBars(playing: Boolean) {
-    var step by remember { mutableLongStateOf(0L) }
-    if (playing) {
-        LaunchedEffect(Unit) {
+    val context = LocalContext.current
+    var levels by remember { mutableStateOf(List(MusicSound.BANDS) { MusicSound.RESTING }) }
+    LaunchedEffect(playing) {
+        val sound = MusicSound()
+        try {
             while (true) {
-                delay(250)
-                step++
+                val awake = context.getSystemService(PowerManager::class.java)?.isInteractive != false
+                sound.setActive(playing && awake)
+                if (!awake) {
+                    delay(1000)
+                    continue
+                }
+                val targets = if (playing) sound.levels() else List(MusicSound.BANDS) { MusicSound.RESTING }
+                levels = levels.zip(targets) { shown, target -> shown + (target - shown) * if (target > shown) 0.7f else 0.3f }
+                delay(50)
             }
+        } finally {
+            sound.release()
         }
     }
-    Canvas(Modifier.padding(end = 8.dp).size(width = 15.dp, height = 14.dp)) {
+    Canvas(Modifier.padding(end = 8.dp).size(width = 19.dp, height = 16.dp)) {
         val barWidth = 3.dp.toPx()
-        val gap = (size.width - barWidth * 3) / 2
-        repeat(3) { index ->
-            val energy = if (playing) listOf(0.35f, 1f, 0.6f, 0.8f)[((step + index * 3) % 4).toInt()] else 0.25f
-            val height = size.height * energy
+        val gap = (size.width - barWidth * levels.size) / (levels.size - 1)
+        levels.forEachIndexed { index, energy ->
+            val height = (size.height * energy).coerceAtLeast(barWidth)
             drawRoundRect(
                 MitauriColors.Success,
                 Offset(index * (barWidth + gap), (size.height - height) / 2),

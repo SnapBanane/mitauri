@@ -60,12 +60,12 @@ class ScreenshotTest {
         )
     }
 
-    // The user's phone: an 80 pixel cutout at the top, at 2.75 pixels per dp. Drawn in grey to check the alignment.
-    private val camera = CameraHole(29.dp, 14.5.dp)
+    // The user's phone: a hole 26 dp down, with the pill starting 9 dp down. Drawn in grey to check the alignment.
+    private val camera = CameraHole(29.dp, 26.dp)
 
     private fun onScreen(pill: @Composable () -> Unit) = show {
-        Box(Modifier.padding(top = 2.dp).fillMaxWidth(), contentAlignment = Alignment.TopCenter) { pill() }
-        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+        Box(Modifier.padding(top = 9.dp).fillMaxWidth(), contentAlignment = Alignment.TopCenter) { pill() }
+        Box(Modifier.padding(top = 11.5.dp).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
             Canvas(Modifier.size(29.dp)) { drawCircle(Color.DarkGray, radius = size.minDimension / 4) }
         }
     }

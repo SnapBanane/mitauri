@@ -156,9 +156,10 @@ countdown only updates while on screen, and with nothing running, nothing is dra
 screen or saved on the phone, but it comes back when the app reconnects to a running server. Dismissing it on the
 phone stops it coming back, but a reminder set with it still fires.
 
-While Spotify plays, the song shows there too, with the art and title left of the camera and the artist right of it.
-Tap for full text, previous, pause, next and Hide, which lasts until you next pause. A paused song stays for a minute.
-Voice and countdowns take priority. This reads Spotify's media session through the app's notification access, so it
+While Spotify plays, a small pill shows the cover left of the camera and the song name right of it.
+Tap for the full text, live bars, previous, pause, next and Hide, which lasts until you next pause. A paused song stays for a minute.
+Its bars follow the music, using only how strong the bass to treble are at that moment, and stop while the screen is
+off. Voice and countdowns take priority. This reads Spotify's media session through the app's notification access, so it
 needs no account or Spotify API, and nothing about the song leaves the phone.
 
 The pill reads the camera's position from Android and leaves that space free, moving longer text below it.
