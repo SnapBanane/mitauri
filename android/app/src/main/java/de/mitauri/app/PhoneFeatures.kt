@@ -134,12 +134,17 @@ object NotificationAccess {
         val key = handles[id] ?: return "That notification is no longer available. Read the notifications again."
         val sbn = find(key) ?: return "That notification is gone."
         cantReply(context, sbn)?.let { return it }
+        return askToConfirm(context, key, recipient(sbn), text)
+    }
+
+    fun askToConfirm(context: Context, key: String, to: String, text: String): String {
+        val sbn = find(key) ?: return "That notification is gone."
         context.startActivity(
             Intent(context, ReplyActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
                 .putExtra("key", key)
                 .putExtra("app", appLabel(context, sbn.packageName))
-                .putExtra("to", recipient(sbn))
+                .putExtra("to", to)
                 .putExtra("text", text)
         )
         return "Waiting for the user to check and confirm on the phone. Nothing has been sent yet."

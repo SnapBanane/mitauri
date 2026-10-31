@@ -19,6 +19,7 @@ import java.util.UUID
 object PlaceReminders {
     private const val MAX_REMINDERS = 20
     private const val EXTRA_ID = "id"
+    private const val LEAVING_PAUSE_MILLIS = 60 * 60 * 1000L
 
     private fun store(context: Context) = EncryptedFile(context.applicationContext, "places.enc")
 
@@ -29,7 +30,7 @@ object PlaceReminders {
         Manifest.permission.ACCESS_BACKGROUND_LOCATION,
     ).all { context.checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
 
-    fun add(context: Context, text: String, latitude: Double, longitude: Double, radius: Float): String {
+    fun add(context: Context, text: String, latitude: Double, longitude: Double, radius: Float, leaving: Boolean = false): String {
         if (!canWatch(context)) return "Not set: the user has to choose 'Allow all the time' for location in the app's Settings."
         val reminders = all(context)
         if (reminders.length() >= MAX_REMINDERS) return "Not set: too many place reminders are waiting."
@@ -39,6 +40,7 @@ object PlaceReminders {
             .put("latitude", latitude)
             .put("longitude", longitude)
             .put("radius", radius.toDouble())
+            .put("leaving", leaving)
         store(context).write(reminders.put(reminder).toString())
         watch(context, reminder)
         return "Set."
@@ -49,7 +51,10 @@ object PlaceReminders {
         val reminders = all(context)
         for (i in 0 until reminders.length()) {
             val item = reminders.getJSONObject(i)
-            visible.put(JSONObject().put("id", item.getString("id")).put("text", item.getString("text")))
+            visible.put(
+                JSONObject().put("id", item.getString("id")).put("text", item.getString("text"))
+                    .put("when", if (item.optBoolean("leaving")) "every time they leave" else "when they arrive"),
+            )
         }
         return visible
     }
@@ -76,16 +81,28 @@ object PlaceReminders {
         for (i in 0 until reminders.length()) watch(context, reminders.getJSONObject(i))
     }
 
-    fun onArrived(context: Context, id: String) {
+    private fun onTriggered(context: Context, id: String, entering: Boolean) {
         val reminders = all(context)
         for (i in 0 until reminders.length()) {
             val item = reminders.getJSONObject(i)
-            if (item.getString("id") == id) {
+            if (item.getString("id") != id) continue
+            if (item.optBoolean("leaving")) {
+                if (!entering && leftLongEnoughAgo(context, id)) Calls.notify(context, "Reminder", item.getString("text"))
+            } else if (entering) {
                 Calls.notify(context, "Reminder", item.getString("text"))
                 remove(context, id)
-                return
             }
+            return
         }
+    }
+
+    /** A weak signal at home can look like leaving, so it speaks up once at most in that time. */
+    private fun leftLongEnoughAgo(context: Context, id: String): Boolean {
+        val saved = context.getSharedPreferences("place_reminders", Context.MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        if (now - saved.getLong(id, 0) < LEAVING_PAUSE_MILLIS) return false
+        saved.edit().putLong(id, now).apply()
+        return true
     }
 
     @SuppressLint("MissingPermission")
@@ -106,7 +123,7 @@ object PlaceReminders {
     class PlaceReceiver : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             val id = intent.getStringExtra(EXTRA_ID) ?: return
-            if (intent.getBooleanExtra(LocationManager.KEY_PROXIMITY_ENTERING, false)) onArrived(context, id)
+            onTriggered(context, id, intent.getBooleanExtra(LocationManager.KEY_PROXIMITY_ENTERING, false))
         }
     }
 }

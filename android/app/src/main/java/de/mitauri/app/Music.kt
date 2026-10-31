@@ -275,7 +275,12 @@ object Music {
     /** The cover's average colour, made bright enough to read on black, for the bars and the progress line. */
     private fun accentOf(source: Bitmap): Color {
         val hsv = FloatArray(3)
-        android.graphics.Color.colorToHSV(Bitmap.createScaledBitmap(source, 1, 1, true).getPixel(0, 0), hsv)
+        val pixel = try {
+            Bitmap.createScaledBitmap(source, 1, 1, true).getPixel(0, 0)
+        } catch (_: RuntimeException) {
+            return Color.White
+        }
+        android.graphics.Color.colorToHSV(pixel, hsv)
         hsv[1] = hsv[1].coerceAtLeast(0.45f)
         hsv[2] = hsv[2].coerceAtLeast(0.9f)
         return Color(android.graphics.Color.HSVToColor(hsv))

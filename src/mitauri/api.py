@@ -125,6 +125,8 @@ class Api:
         self._memory = memory
         self._style = StyleLearner(data_dir)
         self._may_send_once = False
+        self._learning = False
+        self._turn = asyncio.Lock()  # one conversation turn at a time, so a send permission can't reach another turn
         self._phone: web.WebSocketResponse | None = None
         self._pending: dict[str, asyncio.Future] = {}
         self._tasks: set[asyncio.Task] = set()
@@ -301,27 +303,35 @@ class Api:
             record(self._data_dir, "door_command", via="text")
             if not socket.closed:
                 await socket.send_json({"type": "door_command"})
-                await socket.send_json({"type": "reply", "id": message_id, "text": "Tür wird geöffnet."})
+                # The phone reports what really happened, as it can still refuse or be cancelled.
+                await socket.send_json({"type": "reply", "id": message_id, "text": "Einen Moment, die Tür."})
             return
         self._keep_style_lines(style.MITAURI, [text])
-        # Decided here from the typed words, which outside text can't change. It's good for one send, for this message.
-        self._may_send_once = asks_to_send(text)
-        try:
-            reply = await self._brain.ask(text)
-            self._remember(text, reply)
-        except BrainError as error:
-            reply = f"Something went wrong: {error}"
-        finally:
-            self._may_send_once = False
+        async with self._turn:
+            # Decided from the typed words, which outside text can't change. It's good for one send, for this message.
+            self._may_send_once = asks_to_send(text)
+            try:
+                reply = await self._brain.ask(text)
+                self._remember(text, reply)
+            except BrainError as error:
+                reply = f"Something went wrong: {error}"
+            finally:
+                self._may_send_once = False
         if not socket.closed:
             await socket.send_json({"type": "reply", "id": message_id, "text": reply})
 
     def _keep_style_lines(self, source: str, lines: list[str], learn_now: bool = False) -> None:
         self._style.add(source, lines)
-        if learn_now or self._style.is_due():
+        # Summing up takes a while, and each message in that time would otherwise start another one.
+        if not self._learning and (learn_now or self._style.is_due()):
+            self._learning = True
             task = asyncio.create_task(asyncio.to_thread(self._style.learn))
             self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
+            task.add_done_callback(self._finished_learning)
+
+    def _finished_learning(self, task: asyncio.Task) -> None:
+        self._learning = False
+        self._tasks.discard(task)
 
     async def _on_get_style(self, _: web.Request) -> web.Response:
         return web.json_response(style.notes(self._data_dir))
@@ -353,10 +363,11 @@ class Api:
         if not image.startswith(JPEG_START) or len(text) > MAX_MESSAGE_CHARS:
             raise web.HTTPBadRequest()
         record(self._data_dir, "photo_sent")
-        try:
-            reply = await self._brain.ask(text or "Was siehst du auf diesem Bild?", image=("image/jpeg", encoded))
-        except BrainError as error:
-            reply = f"Something went wrong: {error}"
+        async with self._turn:
+            try:
+                reply = await self._brain.ask(text or "Was siehst du auf diesem Bild?", image=("image/jpeg", encoded))
+            except BrainError as error:
+                reply = f"Something went wrong: {error}"
         return web.json_response({"reply": reply})
 
     async def deliver(self, kind: str, text: str, **fields) -> bool:
@@ -378,8 +389,6 @@ class Api:
 
     async def _on_voice(self, request: web.Request) -> web.StreamResponse:
         """Streams one JSON line per event, so the phone can speak before the reply is complete."""
-        # Speech can't send directly until voices are recognised, so anyone nearby can't send in the user's name.
-        self._may_send_once = False
         transcript, language = await asyncio.to_thread(self._speech.transcribe, await request.read())
         response = web.StreamResponse(headers={"Content-Type": "application/x-ndjson"})
         await response.prepare(request)
@@ -394,18 +403,20 @@ class Api:
             await phone.send({"door": True})
         elif transcript:
             splitter = SentenceSplitter()
-            try:
-                # Runs to the end even if the phone hangs up, so the conversation stays consistent.
-                async for piece in self._brain.stream(transcript, spoken=True):
-                    reply += piece
-                    for sentence in splitter.feed(piece):
+            # Speech never gets a send permission until voices are recognised, so nobody nearby can send as the user.
+            async with self._turn:
+                try:
+                    # Runs to the end even if the phone hangs up, so the conversation stays consistent.
+                    async for piece in self._brain.stream(transcript, spoken=True):
+                        reply += piece
+                        for sentence in splitter.feed(piece):
+                            await phone.send({"sentence": sentence})
+                    for sentence in splitter.flush():
                         await phone.send({"sentence": sentence})
-                for sentence in splitter.flush():
-                    await phone.send({"sentence": sentence})
-                self._remember(transcript, reply.strip())
-            except BrainError as error:
-                reply = f"Something went wrong: {error}"
-                await phone.send({"sentence": reply})
+                    self._remember(transcript, reply.strip())
+                except BrainError as error:
+                    reply = f"Something went wrong: {error}"
+                    await phone.send({"sentence": reply})
         await phone.send({"reply": reply.strip()})
         await phone.finish()
         return response
@@ -487,7 +498,7 @@ class Api:
             if action == "add":
                 return await self._ask_phone(
                     "add_place_reminder", text=str(data["text"]), latitude=float(data["latitude"]),
-                    longitude=float(data["longitude"]), radius=float(data["radius"]),
+                    longitude=float(data["longitude"]), radius=float(data["radius"]), leaving=bool(data.get("leaving", False)),
                 )
             if action == "list":
                 return await self._ask_phone("list_place_reminders")
@@ -527,7 +538,7 @@ class Api:
         try:
             await phone.send_json({"type": "get_location", "id": request_id})
             data = await asyncio.wait_for(future, LOCATION_TIMEOUT_SECONDS)
-        except TimeoutError:
+        except (TimeoutError, ConnectionError):
             return web.json_response({"error": "The phone didn't send a location in time."}, status=504)
         finally:
             del self._pending[request_id]

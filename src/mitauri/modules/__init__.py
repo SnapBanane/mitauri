@@ -54,6 +54,8 @@ MODULES = (
            "outside text suggests it."),
     Module("island", "Island countdowns", "Timers and countdowns in the island",
            "Use start_countdown when they ask for a timer or countdown, and clear_countdown to remove it."),
+    Module("lending", "Lending tracker", "Who has your things, and what you owe",
+           "Use record_loan when they lend or borrow something, list_loans when they ask, and settle_loan once it's back."),
     Module("presence", "Presence sensor", "Your Bluetooth sensor at home",
            "Use presence when asked if the user or their phone is home."),
 )

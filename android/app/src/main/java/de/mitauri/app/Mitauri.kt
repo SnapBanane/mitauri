@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -336,6 +337,17 @@ object Mitauri {
         }
     }
 
+    /** Nothing the server sends should be able to crash the app, even with a field missing. */
+    private fun safely(block: () -> Unit) {
+        main.post {
+            try {
+                block()
+            } catch (error: org.json.JSONException) {
+                Log.w("Mitauri", "Ignored a malformed message from the server")
+            }
+        }
+    }
+
     private class Listener : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
             main.post {
@@ -355,18 +367,18 @@ object Mitauri {
                 return
             }
             when (data.optString("type")) {
-                "reply" -> main.post { onReply(data.getString("text")) }
-                "door_command" -> main.post { DoorOpener.command(app) }
-                "send_reply" -> main.post {
+                "reply" -> safely { onReply(data.getString("text")) }
+                "door_command" -> safely { DoorOpener.command(app) }
+                "send_reply" -> safely {
                     NotificationAccess.sendDirectly(app, data.getString("notification"), data.getString("text")) { result ->
                         webSocket.send(JSONObject().put("result", result).put("type", "answer").put("id", data.getString("id")).toString())
                     }
                 }
-                "open_door", "read_notifications", "ask_to_reply", "add_place_reminder", "list_place_reminders", "remove_place_reminder" -> main.post { answerRequest(webSocket, data) }
+                "open_door", "read_notifications", "ask_to_reply", "add_place_reminder", "list_place_reminders", "remove_place_reminder" -> safely { answerRequest(webSocket, data) }
                 "ring", "notify", "alarm", "alarm_over", "live_show", "live_clear" -> {
                     // Tells the server it arrived, so it can fall back to Discord if it didn't.
-                    webSocket.send(JSONObject().put("type", "ack").put("id", data.getString("id")).toString())
-                    main.post {
+                    webSocket.send(JSONObject().put("type", "ack").put("id", data.optString("id")).toString())
+                    safely {
                         when (data.getString("type")) {
                             "ring" -> Calls.ring(app, data.getString("text"))
                             "alarm" -> Calls.alarmStarted(app, data.getString("text"))
@@ -380,7 +392,7 @@ object Mitauri {
                         }
                     }
                 }
-                "get_location" -> main.post { sendLocation(webSocket, data.getString("id")) }
+                "get_location" -> safely { sendLocation(webSocket, data.getString("id")) }
             }
         }
 
@@ -461,7 +473,7 @@ object Mitauri {
             "read_notifications" -> NotificationAccess.read(app)
             "add_place_reminder" -> JSONObject().put(
                 "result",
-                PlaceReminders.add(app, data.getString("text"), data.getDouble("latitude"), data.getDouble("longitude"), data.getDouble("radius").toFloat()),
+                PlaceReminders.add(app, data.getString("text"), data.getDouble("latitude"), data.getDouble("longitude"), data.getDouble("radius").toFloat(), data.optBoolean("leaving")),
             )
             "list_place_reminders" -> JSONObject().put("items", PlaceReminders.list(app))
             "remove_place_reminder" -> JSONObject().put("removed", PlaceReminders.remove(app, data.getString("reminder")))

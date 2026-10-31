@@ -161,6 +161,12 @@ exact text. If you don't say what to write, Mitauri writes it in your style. Tap
 allows one reply. Voice until voices are recognised, replies from 1 to 5 am, and a second reply go to the fingerprint
 screen. A locked phone never sends.
 
+## Lending and leaving
+
+"Ich hab Max meine Bohrmaschine geliehen" is noted, and "wer hat was von mir?" lists it. "Erinner mich an die Schlüssel,
+wenn ich von zu Hause losgehe" reminds you each time you leave, once an hour at most, until you cancel it. Android
+watches for this on the phone, so the server doesn't learn when you leave.
+
 ## Auto music
 
 Settings > Auto music starts Spotify when headphones you picked connect. It doesn't start during a call, interrupt what's

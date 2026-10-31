@@ -42,12 +42,17 @@ object ReplySender {
         val app = context.applicationContext
         if (pending != null) return answer("Another reply is still waiting to go out, so this one wasn't sent.")
         Island.show(app, IslandMode.MESSAGE, "An $to: $text")
+        // Sending unseen would take away the only chance to stop it, so the confirmation screen takes over.
+        if (!Island.isOnScreen) {
+            Island.hideMessage()
+            return answer(NotificationAccess.askToConfirm(context, key, to, text))
+        }
         val send = Runnable {
             pending = null
             waiting = null
             val sent = NotificationAccess.sendReply(app, key, text)
             Island.show(app, IslandMode.MESSAGE, if (sent) "Gesendet" else "Nicht gesendet")
-            main.postDelayed({ Island.hide() }, RESULT_MILLIS)
+            main.postDelayed({ Island.hideMessage() }, RESULT_MILLIS)
             answer(if (sent) "Sent." else "It couldn't be sent, because the notification is gone or closed.")
         }
         pending = send
@@ -200,8 +205,9 @@ class StyleImportActivity : FragmentActivity() {
 
     private fun send(found: List<ExportLine>, name: String) {
         sending = true
+        // The newest ones say most about how you write now, and a whole chat could be too big to send.
         val own = found.filter { it.sender == name }.map { it.text.let(NotificationFilter::clean) }
-            .filterNot { it.startsWith("(hidden") }
+            .filterNot { it.startsWith("(hidden") }.takeLast(MAX_LINES)
         Thread {
             val sent = try {
                 Mitauri.importStyleLines(own)
@@ -218,6 +224,7 @@ class StyleImportActivity : FragmentActivity() {
 
     private companion object {
         const val MAX_SENDERS = 12
+        const val MAX_LINES = 2_000
         const val MAX_EXPORT_BYTES = 20 * 1024 * 1024
     }
 }

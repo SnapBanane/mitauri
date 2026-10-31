@@ -503,6 +503,40 @@ def test_only_a_typed_command_sends_directly_and_only_once(tmp_path):
     with_api(test, tmp_path)
 
 
+def test_a_send_permission_cannot_leak_into_an_earlier_turn_still_running(tmp_path):
+    release = asyncio.Event()
+    started = asyncio.Event()
+
+    async def test(session):
+        original = FakeBrain.ask
+
+        async def slow(self, text, image=None):
+            if text == "first":
+                started.set()
+                await release.wait()
+                async with ClientSession() as tool:
+                    await tool.post(f"{BASE}/reply", json={"notification": "n1", "text": "ok"}, headers=INTERNAL)
+                return "done"
+            return await original(self, text, image)
+
+        FakeBrain.ask = slow
+        try:
+            async with connect(session) as socket:
+                await socket.send_json({"type": "message", "id": "1", "text": "first"})
+                await started.wait()
+                await socket.send_json({"type": "message", "id": "2", "text": "antworte Max: ok"})
+                await asyncio.sleep(0.05)
+                release.set()
+                event = await socket.receive_json()
+                assert event["type"] == "ask_to_reply"  # the first turn stays without permission
+                await socket.send_json({"type": "answer", "id": event["id"], "result": "x"})
+                assert (await socket.receive_json())["type"] == "reply"
+                assert (await socket.receive_json())["type"] == "reply"
+        finally:
+            FakeBrain.ask = original
+    with_api(test, tmp_path)
+
+
 def test_send_commands_are_recognised():
     from mitauri.api import asks_to_send
     for command in ("Antworte Max: bin da", "schreib ihm ok", "sag ihr ich komme", "reply to him",

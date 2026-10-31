@@ -98,6 +98,7 @@ object DoorOpener {
         val waiting = pending ?: return false
         main.removeCallbacks(waiting)
         pending = null
+        lastCommand = 0L // Cancelled, so nothing happened that a repeat needs protecting against.
         Mitauri.addVoiceReply("Tür nicht geöffnet.", false)
         return true
     }
@@ -105,7 +106,11 @@ object DoorOpener {
     fun command(context: Context) {
         val app = context.applicationContext
         val now = SystemClock.elapsedRealtime()
-        if (pending != null || webView != null || (lastCommand != 0L && now - lastCommand < REPEAT_BLOCK_MILLIS)) return
+        if (pending != null || webView != null) return
+        if (lastCommand != 0L && now - lastCommand < REPEAT_BLOCK_MILLIS) {
+            finish(app, "The door was just used, so this was ignored")
+            return
+        }
         if (app.getSystemService(KeyguardManager::class.java).isKeyguardLocked) {
             finish(app, "Locked phone: door not opened")
             return
@@ -196,7 +201,7 @@ object DoorOpener {
     private fun finish(app: Context, result: String) {
         Mitauri.addVoiceReply(result, false)
         Island.show(app, IslandMode.MESSAGE, result)
-        main.postDelayed({ Island.hide() }, MESSAGE_MILLIS)
+        main.postDelayed({ Island.hideMessage() }, MESSAGE_MILLIS)
     }
 
     private fun isTrusted(uri: Uri?) = uri != null && uri.scheme == "https" && isTrustedHost(uri.host)

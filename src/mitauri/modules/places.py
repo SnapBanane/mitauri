@@ -85,8 +85,11 @@ def travel_time(
 
 
 @tool
-def remind_at_place(text: str, place: str | None = None, radius_metres: int = 150, allow_far: bool = False) -> str:
+def remind_at_place(text: str, place: str | None = None, radius_metres: int = 150, allow_far: bool = False, when_leaving: bool = False) -> str:
     """Notify the user when they reach a place. Leave place empty for where they are now.
+
+    With when_leaving, it notifies when they leave the place instead, every time, until cancelled. Use it for
+    things like "erinner mich an Schlüssel und Ladekabel, wenn ich von zu Hause losgehe".
 
     It picks the closest match to the phone, like the nearest "Rewe". Always tell the user which place
     was found. Pass allow_far only after they confirmed a place reported as far away. The watching
@@ -109,7 +112,7 @@ def remind_at_place(text: str, place: str | None = None, radius_metres: int = 15
         if "latitude" not in position:
             return f"Not set: {position.get('error', 'no location')}"
         latitude, longitude = position["latitude"], position["longitude"]
-    answer = toolbox.ask_server("/place-reminders", {"action": "add", "text": text, "latitude": latitude, "longitude": longitude, "radius": radius})
+    answer = toolbox.ask_server("/place-reminders", {"action": "add", "text": text, "latitude": latitude, "longitude": longitude, "radius": radius, "leaving": when_leaving})
     return f"{answer.get('result', answer.get('error', 'Not set.'))} Place: {name}."
 
 

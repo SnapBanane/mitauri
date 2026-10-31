@@ -33,6 +33,13 @@ class Reminders:
                 "DELETE FROM reminders WHERE id = ?", (reminder_id,)
             ).rowcount > 0
 
+    def remove_matching(self, reminder_id: int, text: str) -> bool:
+        """For an id kept elsewhere: ids get reused once a reminder has fired, so the text must match too."""
+        with self._db:
+            return self._db.execute(
+                "DELETE FROM reminders WHERE id = ? AND text = ?", (reminder_id, text)
+            ).rowcount > 0
+
     def due(self, now: datetime) -> list[tuple[int, str, str, float]]:
         return self._db.execute(
             "SELECT id, text, kind, due FROM reminders WHERE due <= ? ORDER BY due", (now.timestamp(),)

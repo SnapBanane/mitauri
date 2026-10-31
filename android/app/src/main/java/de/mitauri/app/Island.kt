@@ -299,6 +299,13 @@ object Island {
         return true
     }
 
+    val isOnScreen get() = view != null
+
+    /** For a message's timer: by then voice may have taken over, and that must stay. */
+    fun hideMessage() {
+        if (mode == IslandMode.MESSAGE) hide()
+    }
+
     fun hide() {
         if (!embedded && showBackground()) return
         shown = false
@@ -450,9 +457,19 @@ object Island {
         )
         val start = (ROW_HEIGHT.value * 2 * density).toInt()
         val touching = layout(start, start, shared or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH)
+        // Android blocks touches through another app's solid overlay, but not through a slightly see-through one.
+        if (!overService) drawing.alpha = 0.8f
         val manager = windowManager() ?: return
-        manager.addView(root, drawing)
-        manager.addView(touchRoot, touching)
+        try {
+            manager.addView(root, drawing)
+            manager.addView(touchRoot, touching)
+        } catch (error: RuntimeException) {
+            // Permission just taken away or the service went. No island is better than a crash.
+            Log.w("Mitauri", "The island couldn't be shown: ${error.message}")
+            if (root.isAttachedToWindow) manager.removeViewImmediate(root)
+            overlayOwner.destroy()
+            return
+        }
         view = root
         viewParams = drawing
         touch = touchRoot

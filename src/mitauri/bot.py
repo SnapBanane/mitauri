@@ -108,19 +108,33 @@ class MitauriBot(discord.Client):
 
     async def _tick(self) -> None:
         now = datetime.now(self._timezone)
+        # The alarm goes first, and each step on its own: one broken reminder or a Discord outage must not stop the rest.
+        steps = [self._check_school_wake(now), self._deliver_reminders(now), self._report_proposals(), self._report_research(), self._send_briefing(now)]
+        for step in steps:
+            try:
+                await step
+            except Exception:
+                log.exception("A scheduled step failed")
+
+    async def _deliver_reminders(self, now: datetime) -> None:
         for reminder_id, text, kind, due in self._reminders.due(now):
-            # Stays waiting until the phone confirms it, so nothing is lost while it's offline.
-            if await self._deliver(text, kind, now.timestamp() - due):
-                self._reminders.remove(reminder_id)
-                self._told_unreachable.discard(reminder_id)
-            elif reminder_id not in self._told_unreachable:
-                # Discord isn't private, so this says that something is waiting, not what.
-                await self._send_to_owner("⏰ Ich habe etwas für dich, aber dein Handy ist nicht erreichbar. Öffne die Mitauri-App.")
-                self._told_unreachable.add(reminder_id)
-                record(self._data_dir, "delivery_waiting", kind=kind)
-        await self._check_school_wake(now)
-        await self._report_proposals()
-        await self._report_research()
+            try:
+                await self._deliver_reminder(reminder_id, text, kind, now.timestamp() - due)
+            except Exception:
+                log.exception("A reminder failed")
+
+    async def _deliver_reminder(self, reminder_id: int, text: str, kind: str, late_seconds: float) -> None:
+        # Stays waiting until the phone confirms it, so nothing is lost while it's offline.
+        if await self._deliver(text, kind, late_seconds):
+            self._reminders.remove(reminder_id)
+            self._told_unreachable.discard(reminder_id)
+        elif reminder_id not in self._told_unreachable:
+            # Discord isn't private, so this says that something is waiting, not what.
+            self._told_unreachable.add(reminder_id)
+            record(self._data_dir, "delivery_waiting", kind=kind)
+            await self._send_to_owner("⏰ Ich habe etwas für dich, aber dein Handy ist nicht erreichbar. Öffne die Mitauri-App.")
+
+    async def _send_briefing(self, now: datetime) -> None:
         if self._briefing_time and briefing_due(now, self._briefing_time, self._last_briefing()):
             # Recorded first, so a failure can't retry and drain the usage limit all morning.
             self._briefing_file.write_text(now.date().isoformat())

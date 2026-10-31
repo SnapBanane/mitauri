@@ -268,15 +268,21 @@ object VoiceMode {
             }
             player = MediaPlayer().apply {
                 setAudioAttributes(speechAttributes)
-                setDataSource(file.path)
                 setOnCompletionListener { done() }
                 setOnErrorListener { _, _, _ ->
                     failed = true
                     done()
                     true
                 }
-                prepare()
-                start()
+                try {
+                    setDataSource(file.path)
+                    prepare()
+                    start()
+                } catch (_: Exception) {
+                    // Audio that can't be played shouldn't crash the app. The answer is still in the chat.
+                    failed = true
+                    main.post(done)
+                }
             }
         }
     }

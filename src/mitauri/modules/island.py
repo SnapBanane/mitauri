@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta, timezone
 
 from .. import toolbox
@@ -16,7 +17,8 @@ def _cancel_reminder() -> None:
     """A replaced or cleared countdown must not still announce its end."""
     saved = data_dir() / "countdown-reminder"
     if saved.exists():
-        Reminders(data_dir() / "reminders.db").remove(int(saved.read_text()))
+        entry = json.loads(saved.read_text())
+        Reminders(data_dir() / "reminders.db").remove_matching(entry["id"], entry["text"])
         saved.unlink()
 
 
@@ -38,8 +40,9 @@ def start_countdown(title: str, minutes: float, detail: str | None = None, remin
     if remind_at_end:
         reminders = Reminders(data_dir() / "reminders.db")
         if len(reminders.pending()) < MAX_PENDING_REMINDERS:
-            reminder = reminders.add(f"{title[:MAX_TITLE_CHARS]}: Zeit ist um.", datetime.now(timezone.utc) + timedelta(minutes=minutes))
-            (data_dir() / "countdown-reminder").write_text(str(reminder))
+            text = f"{title[:MAX_TITLE_CHARS]}: Zeit ist um."
+            reminder = reminders.add(text, datetime.now(timezone.utc) + timedelta(minutes=minutes))
+            (data_dir() / "countdown-reminder").write_text(json.dumps({"id": reminder, "text": text}))
     return answer
 
 

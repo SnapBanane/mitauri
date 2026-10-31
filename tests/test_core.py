@@ -1118,7 +1118,7 @@ def test_all_tools_still_exist_and_discord_only_gets_the_safe_ones(tmp_path):
         env={**os.environ, "MITAURI_DATA_DIR": str(tmp_path), "MITAURI_TOOL_PROFILE": profile},
     ).stdout.split()
     full = run("full")
-    assert len(full) == 41, full
+    assert len(full) == 44, full
     assert sorted(run("limited")) == ["maps_route", "next_departures", "plan_trip", "set_reminder", "think_harder"]
 
 
@@ -1222,3 +1222,40 @@ def test_a_refusal_is_never_saved_as_the_users_style(tmp_path, monkeypatch):
     learner.add(style.FRIENDS, ["neue zeile"])
     assert not learner.learn()
     assert style.notes(tmp_path)["friends"] == "kurz, klein"  # the last good one stays
+
+
+def test_loans_can_be_noted_listed_and_settled(tmp_path, monkeypatch):
+    monkeypatch.setenv("MITAURI_DATA_DIR", str(tmp_path))
+    assert "Not saved" in tools.record_loan("x" * 201, "Max")
+    tools.record_loan("Bohrmaschine", "Max")
+    tools.record_loan("20 €", "Lisa", i_lent=False)
+    loans = tools.list_loans()
+    assert [(l["what"], l["direction"]) for l in loans] == [("Bohrmaschine", "lent to them"), ("20 €", "borrowed from them")]
+    assert tools.settle_loan(loans[0]["id"]) == "Settled."
+    assert tools.settle_loan(loans[0]["id"]) == "No loan has that id."
+    assert not tools.LIMITED_TOOLS & {"record_loan", "list_loans", "settle_loan"}  # not on Discord
+
+
+def test_a_timer_never_cancels_someone_elses_reminder_that_reused_its_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("MITAURI_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(toolbox, "ask_server", lambda path, body=None: {"delivered": True})
+    reminders = Reminders(tmp_path / "reminders.db")
+    tools.start_countdown("Pizza", 10)
+    first = reminders.pending()[0][0]
+    reminders.remove(first)  # it fired
+    later = datetime.now(timezone.utc) + timedelta(days=1)
+    assert reminders.add("Zahnarzt", later) == first  # the same id comes back
+    tools.start_countdown("Tee", 3)
+    assert sorted(item[1] for item in reminders.pending()) == ["Tee: Zeit ist um.", "Zahnarzt"]
+
+
+def test_leaving_reminders_ask_the_phone_to_watch_for_leaving(monkeypatch):
+    sent = {}
+    def fake(path, body=None):
+        if path == "/location":
+            return {"latitude": 48.1, "longitude": 11.5}
+        sent.update(body)
+        return {"result": "Set."}
+    monkeypatch.setattr(toolbox, "ask_server", fake)
+    assert "Set." in tools.remind_at_place("Schlüssel", when_leaving=True)
+    assert sent["leaving"] is True
