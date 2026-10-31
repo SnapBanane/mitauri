@@ -62,6 +62,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -82,10 +83,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.TransformOrigin
@@ -141,6 +146,8 @@ private val PILL_MIN_TOP = 2.dp
 private val PILL_EDGE = 6.dp
 private val ROW_HEIGHT = 22.dp
 private val PILL_MAX_WIDTH = 340.dp
+private val DRAWING_HEIGHT = 320.dp
+private val TEXT_FADE = 12.dp
 private val PILL_MAX_RADIUS = 30.dp
 private val MUSIC_TITLE_WIDTH = 58.dp // Leaves the status bar icons on both sides uncovered.
 private val CAMERA_MARGIN = 2.dp
@@ -198,7 +205,9 @@ object Island {
     private val remove = Runnable { removeView() }
     private val collapse = Runnable { expanded = false }
     private var view: View? = null
-    private var params: WindowManager.LayoutParams? = null
+    private var viewParams: WindowManager.LayoutParams? = null
+    private var touch: View? = null
+    private var touchParams: WindowManager.LayoutParams? = null
     private var owner: OverlayOwner? = null
     private var app: Context? = null
     private var watching = false
@@ -332,9 +341,16 @@ object Island {
             !allowedNow(context) -> removeView()
             shown && view == null -> addView()
             view != null -> {
-                val current = params ?: return
-                current.x = locateCamera(context)
-                windowManager()?.updateViewLayout(view, current)
+                val x = locateCamera(context)
+                val manager = windowManager() ?: return
+                viewParams?.let {
+                    it.x = x
+                    manager.updateViewLayout(view, it)
+                }
+                touchParams?.let {
+                    it.x = x
+                    manager.updateViewLayout(touch, it)
+                }
             }
         }
     }
@@ -375,7 +391,12 @@ object Island {
                 }
             }
         }
-        val root = object : FrameLayout(host) {
+        val root = FrameLayout(host).apply {
+            setViewTreeLifecycleOwner(overlayOwner)
+            setViewTreeSavedStateRegistryOwner(overlayOwner)
+            addView(composeView)
+        }
+        val touchRoot = object : FrameLayout(host) {
             // Checked here, before Compose can claim the event for itself.
             override fun dispatchTouchEvent(event: MotionEvent): Boolean {
                 if (event.action == MotionEvent.ACTION_OUTSIDE) {
@@ -388,46 +409,54 @@ object Island {
                     }
                     return true
                 }
-                return super.dispatchTouchEvent(event)
+                val here = IntArray(2).also(::getLocationOnScreen)
+                val there = IntArray(2).also(root::getLocationOnScreen)
+                val moved = MotionEvent.obtain(event)
+                moved.offsetLocation((here[0] - there[0]).toFloat(), (here[1] - there[1]).toFloat())
+                root.dispatchTouchEvent(moved)
+                moved.recycle()
+                return true
             }
-        }.apply {
-            setViewTreeLifecycleOwner(overlayOwner)
-            setViewTreeSavedStateRegistryOwner(overlayOwner)
-            addView(composeView)
         }
         val density = host.resources.displayMetrics.density
+        val type = if (overService) WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY else WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        val shared = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+            WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
+        val offset = locateCamera(host)
+        fun layout(width: Int, height: Int, flags: Int) =
+            WindowManager.LayoutParams(width, height, type, flags, PixelFormat.TRANSLUCENT).apply {
+                gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                x = offset
+                y = 0
+            }
+        // The drawing window never changes size, so nothing can jump, and it lets every touch through. A second
+        // empty window takes touches only over the pill and hands them on, so it can resize without being seen.
+        val drawing = layout(
+            ((PILL_MAX_WIDTH + 28.dp).value * density).toInt(),
+            (DRAWING_HEIGHT.value * density).toInt(),
+            shared or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+        )
         val start = (ROW_HEIGHT.value * 2 * density).toInt()
-        val layout = WindowManager.LayoutParams(
-            start,
-            start,
-            if (overService) WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY else WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
-                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
-                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
-            PixelFormat.TRANSLUCENT,
-        ).apply {
-            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-            x = locateCamera(host)
-            y = 0
-        }
-        windowManager()?.addView(root, layout)
+        val touching = layout(start, start, shared or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH)
+        val manager = windowManager() ?: return
+        manager.addView(root, drawing)
+        manager.addView(touchRoot, touching)
         view = root
-        params = layout
+        viewParams = drawing
+        touch = touchRoot
+        touchParams = touching
         owner = overlayOwner
     }
 
-    /**
-     * The window only changes size around an animation, never during one, because resizing it each frame is what
-     * stutters. It covers just the pill once settled, so touches beside the pill still reach what's below.
-     */
+    /** The touch window follows the pill. It's a little larger during a movement, and exact once settled. */
     private fun fitWindow(size: IntSize) {
-        val current = params ?: return
-        val attached = view ?: return
+        val current = touchParams ?: return
+        val attached = touch ?: return
         val density = attached.resources.displayMetrics.density
-        val width = size.width + size.width % 2 // Even, so the pill stays exactly on the camera.
+        val width = size.width + size.width % 2
         val height = size.height + (camera.pillTop.value * density).roundToInt()
         if (current.width == width && current.height == height) return
         current.width = width
@@ -450,10 +479,14 @@ object Island {
 
     private fun removeView() {
         val current = view ?: return
-        windowManager()?.removeViewImmediate(current)
+        val manager = windowManager()
+        touch?.let { manager?.removeViewImmediate(it) }
+        manager?.removeViewImmediate(current)
         owner?.destroy()
         view = null
-        params = null
+        viewParams = null
+        touch = null
+        touchParams = null
         owner = null
     }
 
@@ -493,7 +526,8 @@ object Island {
     }
 }
 
-private val MORPH = spring<Float>(dampingRatio = 0.76f, stiffness = 340f, visibilityThreshold = 1f)
+private val GROW = spring<Float>(dampingRatio = 0.8f, stiffness = 320f, visibilityThreshold = 1f)
+private val SHRINK = spring<Float>(dampingRatio = 0.95f, stiffness = 280f, visibilityThreshold = 1f) // No bounce on closing.
 
 /**
  * One black shape that grows out of the camera and morphs between its states. Only the shape's size animates, so the
@@ -539,8 +573,10 @@ fun Pill(
                 ),
             )
             coroutineScope {
-                launch { width.animateTo(goalWidth, MORPH) }
-                launch { height.animateTo(goalHeight, MORPH) }
+                // One spring for both, so the shape doesn't change its proportions on the way.
+                val movement = if (goalHeight < height.value) SHRINK else GROW
+                launch { width.animateTo(goalWidth, movement) }
+                launch { height.animateTo(goalHeight, movement) }
                 launch { fade.animateTo(if (shown) 1f else 0f, if (shown) tween(120) else tween(200, 200)) }
             }
             onBounds(IntSize(goalWidth.roundToInt(), goalHeight.roundToInt()))
@@ -565,8 +601,8 @@ fun Pill(
                 AnimatedContent(
                     targetState = mode to expanded,
                     transitionSpec = {
-                        (fadeIn(tween(200, 70)) + scaleIn(spring(dampingRatio = 0.8f, stiffness = 380f), initialScale = 0.9f)) togetherWith
-                            fadeOut(tween(80)) using SizeTransform(clip = false) { _, _ -> snap() }
+                        (fadeIn(tween(240, 90)) + scaleIn(spring(dampingRatio = 0.8f, stiffness = 380f), initialScale = 0.9f)) togetherWith
+                            fadeOut(tween(160)) using SizeTransform(clip = false) { _, _ -> snap() }
                     },
                     contentAlignment = Alignment.TopCenter,
                     label = "content",
@@ -795,6 +831,7 @@ private fun Cover(music: NowPlaying, levels: BarLevels, size: Dp, corner: Dp, am
     }
 }
 
+/** The text melts away at the edges instead of being cut off. The right edge only does so if there's more to read. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SongTitle(title: String, modifier: Modifier, fontSize: Int, weight: FontWeight = FontWeight.Normal) {
@@ -807,13 +844,35 @@ private fun SongTitle(title: String, modifier: Modifier, fontSize: Int, weight: 
         },
         label = "title",
     ) {
+        var room by remember { mutableIntStateOf(0) }
+        var textWidth by remember { mutableIntStateOf(0) }
         Text(
             it,
-            Modifier.basicMarquee(iterations = 2, initialDelayMillis = 1500, repeatDelayMillis = 1500, velocity = 28.dp),
+            Modifier
+                .onSizeChanged { size -> room = size.width }
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    val fade = TEXT_FADE.toPx()
+                    val longer = textWidth > room
+                    val end = if (longer) (size.width - fade).coerceAtLeast(fade) / size.width else 1f
+                    drawRect(
+                        Brush.horizontalGradient(
+                            0f to Color.Transparent,
+                            (fade / 2 / size.width) to Color.Black,
+                            end to Color.Black,
+                            1f to if (longer) Color.Transparent else Color.Black,
+                        ),
+                        blendMode = BlendMode.DstIn,
+                    )
+                }
+                .basicMarquee(iterations = 2, initialDelayMillis = 1500, repeatDelayMillis = 1500, velocity = 28.dp)
+                .padding(start = TEXT_FADE / 2),
             color = Color.White,
             fontSize = fontSize.sp,
             fontWeight = weight,
             maxLines = 1,
+            onTextLayout = { layout -> textWidth = layout.size.width },
         )
     }
 }
@@ -823,8 +882,15 @@ private fun MusicCompact(music: NowPlaying, levels: BarLevels, camera: CameraHol
     AroundCamera(
         camera,
         {
-            Cover(music, levels, 20.dp, 5.dp, 0.1f)
-            MusicBars(levels, music.accent, Modifier.padding(start = 6.dp).size(width = 19.dp, height = 16.dp))
+            Row(
+                Modifier.width(MUSIC_TITLE_WIDTH),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Sits in the rounded end of the pill, the same distance from its edge all round.
+                Cover(music, levels, ROW_HEIGHT, ROW_HEIGHT / 2, 0.08f, Modifier.offset(x = -PILL_EDGE))
+                MusicBars(levels, music.accent, Modifier.padding(end = 2.dp).size(width = 19.dp, height = 16.dp))
+            }
         },
         { SongTitle(music.title, Modifier.widthIn(max = MUSIC_TITLE_WIDTH), 14) },
     )
