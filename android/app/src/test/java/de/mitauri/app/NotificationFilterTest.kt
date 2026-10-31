@@ -59,6 +59,13 @@ class NotificationFilterTest {
         assertEquals(false, OwnLines.isOwn("Max", null))
     }
 
+    @Test fun aFlipJustAfterConnectingIsNotADropout() {
+        assertEquals(false, wasRealConnection(270)) // what the user's Nothing Ear did
+        assertEquals(true, wasRealConnection(60_000))
+        assertEquals(true, isDropout(500))
+        assertEquals(false, isDropout(3_050)) // back in the case for 3 seconds counts as reconnecting
+    }
+
     @Test fun autoMusicStaysOutOfTheWay() {
         assertEquals(true, autoMusicMayStart(false, false, null, false, false)) // locked, in a pocket
         assertEquals(true, autoMusicMayStart(true, true, "com.android.chrome", false, false))

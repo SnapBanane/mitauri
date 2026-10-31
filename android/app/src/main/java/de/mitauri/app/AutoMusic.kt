@@ -14,12 +14,20 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.Process
 import android.os.SystemClock
+import android.util.Log
 import android.view.KeyEvent
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
 private val BLOCKING_APPS = setOf("com.whatsapp", "com.whatsapp.w4b")
+private const val STEADY_MILLIS = 5_000L
+private const val DROPOUT_MILLIS = 2_000L
+
+fun wasRealConnection(connectedForMillis: Long) = connectedForMillis >= STEADY_MILLIS
+
+/** A moment's loss of signal shouldn't start music the user may have just paused. Taking them out for longer counts. */
+fun isDropout(goneForMillis: Long) = goneForMillis < DROPOUT_MILLIS
 
 /**
  * Never over a call or music that's already on, or while WhatsApp is open. With the phone in use and no way to see
@@ -36,7 +44,7 @@ object AutoMusic {
     private const val PREFERENCES = "auto_music"
     private const val ROUTE_MILLIS = 1_500L // Android needs a moment to send sound to new headphones.
     private const val CHECK_MILLIS = 4_000L
-    private const val BRIEF_DROP_MILLIS = 60_000L
+    private const val TAG = "Mitauri"
     private const val HISTORY_MILLIS = 6 * 3600 * 1000L
     private val HEADPHONES = setOf(
         AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
@@ -50,6 +58,7 @@ object AutoMusic {
     private var app: Context? = null
     private val connected = mutableSetOf<String>()
     private val leftAt = mutableMapOf<String, Long>()
+    private val connectedAt = mutableMapOf<String, Long>()
     private val play = Runnable { startIfAllowed() }
     private val check = Runnable { openSpotifyIfSilent() }
     private val pressPlay = Runnable { startPlaying() }
@@ -59,24 +68,42 @@ object AutoMusic {
     var chosen by mutableStateOf(emptySet<String>())
         private set
 
+    /** What happened the last time, so it can be seen on the screen instead of guessed. */
+    var lastResult by mutableStateOf("")
+        private set
+
     private val devices = object : AudioDeviceCallback() {
         override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>) {
             for (name in names(added)) {
                 remember(name)
                 // Android also lists what's already connected when this starts. Only a new connection counts.
-                if (connected.add(name) && name in chosen && !cameBackQuickly(name)) {
-                    main.removeCallbacks(play)
-                    main.postDelayed(play, ROUTE_MILLIS)
+                if (!connected.add(name)) continue
+                connectedAt[name] = SystemClock.elapsedRealtime()
+                when {
+                    name !in chosen -> report("$name connected, but it isn't switched on here")
+                    leftAt[name]?.let { isDropout(SystemClock.elapsedRealtime() - it) } == true ->
+                        report("$name dropped out for a moment, so nothing started")
+                    else -> {
+                        report("$name connected")
+                        main.removeCallbacks(play)
+                        main.postDelayed(play, ROUTE_MILLIS)
+                    }
                 }
             }
         }
 
         override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>) {
             for (name in names(removed)) {
+                Log.i(TAG, "Auto music: $name disconnected")
                 connected.remove(name)
-                leftAt[name] = SystemClock.elapsedRealtime()
+                val now = SystemClock.elapsedRealtime()
+                // Android often removes and re-adds headphones just after connecting. That isn't them leaving.
+                if (wasRealConnection(now - (connectedAt[name] ?: now))) leftAt[name] = now
             }
-            if (connected.none { it in chosen }) cancelPending()
+            if (connected.none { it in chosen }) {
+                main.removeCallbacks(check)
+                main.removeCallbacks(pressPlay)
+            }
         }
     }
 
@@ -116,16 +143,15 @@ object AutoMusic {
     private fun names(list: Array<out AudioDeviceInfo>) =
         list.filter { it.isSink && it.type in HEADPHONES }.map { it.productName.toString() }.filter { it.isNotBlank() }.distinct()
 
+    private fun report(result: String) {
+        Log.i(TAG, "Auto music: $result")
+        lastResult = result
+    }
+
     private fun remember(name: String) {
         if (name in seen) return
         seen = seen + name
         app?.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)?.edit()?.putStringSet("seen", seen)?.apply()
-    }
-
-    /** A short dropout shouldn't start music again that the user may have just paused. */
-    private fun cameBackQuickly(name: String): Boolean {
-        val left = leftAt[name] ?: return false
-        return SystemClock.elapsedRealtime() - left < BRIEF_DROP_MILLIS
     }
 
     private fun cancelPending() {
@@ -136,13 +162,29 @@ object AutoMusic {
 
     private fun startIfAllowed() {
         val context = app ?: return
+        if (connected.none { it in chosen }) {
+            report("The headphones disconnected again")
+            return
+        }
         val audio = context.getSystemService(AudioManager::class.java)
         val inCall = audio.mode == AudioManager.MODE_IN_CALL || audio.mode == AudioManager.MODE_IN_COMMUNICATION ||
             audio.mode == AudioManager.MODE_RINGTONE
         val inUse = context.getSystemService(PowerManager::class.java).isInteractive &&
             !context.getSystemService(KeyguardManager::class.java).isKeyguardLocked
         val canSee = canSeeOpenApp(context)
-        if (!autoMusicMayStart(inUse, canSee, if (inUse && canSee) openApp(context) else null, inCall, audio.isMusicActive)) return
+        val open = if (inUse && canSee) openApp(context) else null
+        if (!autoMusicMayStart(inUse, canSee, open, inCall, audio.isMusicActive)) {
+            report(
+                when {
+                    inCall -> "Didn't start: a call is on"
+                    audio.isMusicActive -> "Didn't start: something's already playing"
+                    !canSee -> "Didn't start: usage access is off"
+                    else -> "Didn't start: WhatsApp is open"
+                },
+            )
+            return
+        }
+        report("Starting Spotify")
         startPlaying()
         main.postDelayed(check, CHECK_MILLIS)
     }
@@ -163,8 +205,16 @@ object AutoMusic {
     /** Spotify usually starts unseen. Only if it stayed silent does it open on screen, then gets told to play. */
     private fun openSpotifyIfSilent() {
         val context = app ?: return
-        if (Music.isPlaying || context.getSystemService(AudioManager::class.java).isMusicActive) return
-        val open = context.packageManager.getLaunchIntentForPackage(Music.PACKAGE) ?: return
+        if (Music.isPlaying || context.getSystemService(AudioManager::class.java).isMusicActive) {
+            report("Spotify is playing")
+            return
+        }
+        val open = context.packageManager.getLaunchIntentForPackage(Music.PACKAGE)
+        if (open == null) {
+            report("Spotify can't be found on this phone")
+            return
+        }
+        report("Spotify stayed silent, so opening it")
         context.startActivity(open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         main.postDelayed(pressPlay, CHECK_MILLIS)
     }

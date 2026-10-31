@@ -164,7 +164,7 @@ screen. A locked phone never sends.
 ## Auto music
 
 Settings > Auto music starts Spotify when headphones you picked connect. It doesn't start during a call, interrupt what's
-already playing, and doesn't restart after a dropout of under a minute. It stays out of WhatsApp using Android's usage
+already playing, and doesn't restart after a dropout of under 2 seconds. It stays out of WhatsApp using Android's usage
 access, checked only when headphones connect. Without that, it only starts while the phone is locked. Spotify usually
 starts without opening; it only opens on screen if it stayed silent. Nothing about this leaves the phone.
 

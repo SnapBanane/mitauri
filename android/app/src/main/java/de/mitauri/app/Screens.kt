@@ -388,6 +388,11 @@ fun AutoMusicScreen(onBack: () -> Unit) {
                 }
             }
         }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            AutoMusic.lastResult.ifBlank { "Switched-on headphones start the music the next time they connect." },
+            color = MitauriColors.AccentSoft, style = MaterialTheme.typography.bodyMedium,
+        )
         SectionLabel("Keeping out of WhatsApp")
         Group {
             ListRow(
