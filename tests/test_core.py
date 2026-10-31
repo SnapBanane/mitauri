@@ -1207,3 +1207,18 @@ def test_notification_text_never_reaches_the_writing_style():
     from pathlib import Path
     source = Path(tools.__file__).parent / "modules" / "notifications.py"
     assert "style" not in source.read_text().replace("how they write", "")
+
+
+def test_a_refusal_is_never_saved_as_the_users_style(tmp_path, monkeypatch):
+    from mitauri import style
+    learner = style.StyleLearner(tmp_path)
+    learner.add(style.FRIENDS, [f"zeile {i}" for i in range(25)])
+    monkeypatch.setattr(style, "_ask_claude", lambda prompt, cwd: "I can't do this without their consent.")
+    assert not learner.learn()
+    assert style.notes(tmp_path)["friends"] == ""
+    monkeypatch.setattr(style, "_ask_claude", lambda prompt, cwd: "kurz, klein")
+    assert learner.learn()
+    monkeypatch.setattr(style, "_ask_claude", lambda prompt, cwd: "Leider nicht, dafür fehlt die Einwilligung.")
+    learner.add(style.FRIENDS, ["neue zeile"])
+    assert not learner.learn()
+    assert style.notes(tmp_path)["friends"] == "kurz, klein"  # the last good one stays

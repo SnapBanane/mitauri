@@ -58,4 +58,13 @@ class NotificationFilterTest {
         assertEquals(false, OwnLines.isOwn("Max", "Alex"))
         assertEquals(false, OwnLines.isOwn("Max", null))
     }
+
+    @Test fun autoMusicStaysOutOfTheWay() {
+        assertEquals(true, autoMusicMayStart(false, false, null, false, false)) // locked, in a pocket
+        assertEquals(true, autoMusicMayStart(true, true, "com.android.chrome", false, false))
+        assertEquals(false, autoMusicMayStart(true, true, "com.whatsapp", false, false))
+        assertEquals(false, autoMusicMayStart(true, false, null, false, false)) // can't rule out WhatsApp
+        assertEquals(false, autoMusicMayStart(false, false, null, true, false)) // in a call
+        assertEquals(false, autoMusicMayStart(false, false, null, false, true)) // something's already on
+    }
 }

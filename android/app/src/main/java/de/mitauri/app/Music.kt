@@ -128,7 +128,7 @@ class MusicSound {
 
 /** Follows Spotify on this phone for the island. Nothing about the song is stored or leaves the phone. */
 object Music {
-    private const val PACKAGE = "com.spotify.music"
+    const val PACKAGE = "com.spotify.music"
     private const val PAUSED_HOLD_MILLIS = 60_000L
     private const val ART_PIXELS = 96
 
@@ -182,7 +182,7 @@ object Music {
         when (action) {
             MusicAction.PREVIOUS -> controls.skipToPrevious()
             MusicAction.NEXT -> controls.skipToNext()
-            MusicAction.TOGGLE -> if (isPlaying()) controls.pause() else controls.play()
+            MusicAction.TOGGLE -> if (isPlayingNow()) controls.pause() else controls.play()
             MusicAction.HIDE -> {
                 hidden = true
                 refresh()
@@ -193,6 +193,15 @@ object Music {
                 // Spotify was closed in the same moment, so there's nothing to open.
             }
         }
+    }
+
+    val isPlaying get() = isPlayingNow()
+
+    /** Returns false if Spotify has no session to tell. */
+    fun play(): Boolean {
+        val controls = controller?.transportControls ?: return false
+        controls.play()
+        return true
     }
 
     fun seek(millis: Long) {
@@ -209,7 +218,7 @@ object Music {
         refresh()
     }
 
-    private fun isPlaying() = when (controller?.playbackState?.state) {
+    private fun isPlayingNow() = when (controller?.playbackState?.state) {
         PlaybackState.STATE_PLAYING, PlaybackState.STATE_BUFFERING, PlaybackState.STATE_CONNECTING,
         PlaybackState.STATE_SKIPPING_TO_NEXT, PlaybackState.STATE_SKIPPING_TO_PREVIOUS -> true
         else -> false
@@ -217,7 +226,7 @@ object Music {
 
     private fun refresh() {
         val context = app ?: return
-        val playing = isPlaying()
+        val playing = isPlayingNow()
         if (playing) {
             main.removeCallbacks(pauseOver)
             pausedTooLong = false

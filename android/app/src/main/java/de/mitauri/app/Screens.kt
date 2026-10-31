@@ -70,6 +70,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import java.time.LocalTime
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -354,6 +355,48 @@ fun NotificationAppsScreen(onBack: () -> Unit) {
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun AutoMusicScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
+    var canSee by remember { mutableStateOf(AutoMusic.canSeeOpenApp(context)) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            canSee = AutoMusic.canSeeOpenApp(context)
+            delay(1000)
+        }
+    }
+    ScreenScaffold("Auto music", onBack) {
+        Text(
+            "Spotify starts when headphones you pick here connect. Not during a call, while something's already playing, or while WhatsApp is open.",
+            color = MitauriColors.Muted, style = MaterialTheme.typography.bodyMedium,
+        )
+        SectionLabel("Headphones")
+        val names = AutoMusic.seen.sorted()
+        if (names.isEmpty()) {
+            Text("Connect your headphones once and they'll show up here.", color = MitauriColors.Muted)
+        } else {
+            Group {
+                names.forEachIndexed { index, name ->
+                    if (index > 0) Divider()
+                    ListRow(name) {
+                        Switch(name in AutoMusic.chosen, { on -> AutoMusic.setChosen(context, name, on) }, colors = switchColors())
+                    }
+                }
+            }
+        }
+        SectionLabel("Keeping out of WhatsApp")
+        Group {
+            ListRow(
+                if (canSee) "Usage access is on" else "Turn on usage access",
+                if (canSee) "Mitauri can tell whether WhatsApp is open. It only checks when your headphones connect." else
+                    "Needed to tell whether WhatsApp is open. Without it, music only starts while the phone is locked.",
+                R.drawable.ic_lock,
+                onClick = { context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) },
+            )
         }
     }
 }
@@ -718,6 +761,7 @@ fun SettingsScreen(
     onMemories: () -> Unit,
     onNotifications: () -> Unit,
     onModules: () -> Unit,
+    onAutoMusic: () -> Unit,
     onDoorLogin: () -> Unit,
     doorLoginSet: Boolean,
     onDisconnect: () -> Unit,
@@ -748,7 +792,11 @@ fun SettingsScreen(
             ListRow("Notifications", "Which apps Mitauri may read", R.drawable.ic_bell, onClick = onNotifications) { Icon(R.drawable.ic_chevron, null, size = 20) }
         }
         SectionLabel("Features")
-        Group { ListRow("Modules", "Switch features on and off", R.drawable.ic_settings, onClick = onModules) { Icon(R.drawable.ic_chevron, null, size = 20) } }
+        Group {
+            ListRow("Auto music", "Start Spotify when your headphones connect", R.drawable.ic_settings, onClick = onAutoMusic) { Icon(R.drawable.ic_chevron, null, size = 20) }
+            Divider()
+            ListRow("Modules", "Switch features on and off", R.drawable.ic_settings, onClick = onModules) { Icon(R.drawable.ic_chevron, null, size = 20) }
+        }
         SectionLabel("Setup")
         Group {
             items.forEachIndexed { index, item ->
