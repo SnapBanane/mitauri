@@ -505,10 +505,12 @@ def test_only_a_typed_command_sends_directly_and_only_once(tmp_path):
 
 def test_send_commands_are_recognised():
     from mitauri.api import asks_to_send
-    for command in ("Antworte Max: bin da", "schreib ihm ok", "sag ihr ich komme", "reply to him"):
+    for command in ("Antworte Max: bin da", "schreib ihm ok", "sag ihr ich komme", "reply to him",
+                    "kannst du ihm antworten?", "can you respond", "Ja!", "mach das"):
         assert asks_to_send(command)
     for question in ("Was schreibt Max?", "Was sagt sie?", "lies meine Nachrichten", "wer hat geantwortet",
-                     "sag mir, was er schreibt", "tell me what he wrote", "was steht im text"):
+                     "sag mir, was er schreibt", "tell me what he wrote", "was steht im text",
+                     "was soll ich antworten?", "ja das stimmt"):
         assert not asks_to_send(question)
 
 

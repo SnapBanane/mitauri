@@ -32,8 +32,11 @@ DOOR_COMMANDS = {
 MAX_MESSAGE_CHARS = 20_000
 MAX_STYLE_LINES = 2_000
 SEND_COMMAND = re.compile(
-    r"(?i)\b(antworte|antwort|schreib|schreibe|schick|schicke|sende|send|reply|respond|(?:sag|sage|tell)(?! mir| me))\b"
+    r"(?i)\b(antworte|antworten|antwort|zurückschreiben|schreib|schreibe|schreiben|schick|schicke|schicken|sende|senden|"
+    r"send|reply|respond|answer|write back|(?:sag|sage|sagen|tell)(?! mir| me))\b"
 )
+ASKING_FOR_ADVICE = re.compile(r"(?i)\b(soll ich|sollte ich|should i|what would)\b")
+GOING_AHEAD = {"ja", "jo", "jap", "ja bitte", "yes", "yep", "ok", "okay", "mach", "mach das", "mach mal", "schick", "schick es", "send it"}
 MAX_SPEECH_CHARS = 2_000
 LOOPBACK = ("127.0.0.1", "::1")
 DEVICE = web.RequestKey("device", str)
@@ -74,8 +77,10 @@ def is_door_command(text: str) -> bool:
 
 
 def asks_to_send(text: str) -> bool:
-    """Whether the user's own words tell Mitauri to send something. "Was schreibt Max?" doesn't, and only commands do."""
-    return SEND_COMMAND.search(text) is not None
+    """Whether the user's own words ask Mitauri to send something, or say yes to doing so. "Was schreibt Max?" doesn't."""
+    if re.sub(r"[^\wäöüß ]", "", text.lower()).strip() in GOING_AHEAD:
+        return True
+    return SEND_COMMAND.search(text) is not None and ASKING_FOR_ADVICE.search(text) is None
 
 
 def is_stop_command(text: str) -> bool:

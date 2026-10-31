@@ -156,9 +156,10 @@ without media, share it to "Learn my writing style" and pick which sender is you
 everyone else's stay out. Lines that look like codes, passwords or links are skipped. They stay in the private data
 folder and Haiku sums them up about once a day. See or delete the result under Memories and privacy.
 
-Replies you command by typing, like "antworte Max: bin gleich da", go out after 4 seconds in which the island shows the
-exact text. Tap anywhere to cancel. Each typed message allows one reply. Anything else, including voice until voices
-are recognised, replies from 1 to 5 am, or a second reply, goes to the fingerprint screen. A locked phone never sends.
+Replies you ask for by typing, like "antworte Max: bin gleich da" or just "kannst du antworten?", go out after 4 seconds in which the island shows the
+exact text. If you don't say what to write, Mitauri writes it in your style. Tap anywhere to cancel. Each typed message
+allows one reply. Voice until voices are recognised, replies from 1 to 5 am, and a second reply go to the fingerprint
+screen. A locked phone never sends.
 
 ## Island
 
