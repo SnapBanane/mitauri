@@ -6,6 +6,12 @@ CLI, so it draws on your Claude subscription rather than a paid API.
 Usage counts against the same limits as your normal Claude use. Keep it for yourself: Anthropic does
 not allow offering subscription logins in products for other people.
 
+## Modules
+
+Each feature is a module in `src/mitauri/modules/`, listed in its `__init__.py`. Switch them under Settings > Modules, or
+with `mitauri modules off stocks`. Switching one off removes its tools and instructions, and stops its background work.
+Only the listed modules exist: nothing is loaded from elsewhere. To add one, add a file and a line in that list.
+
 ## Models
 
 Mitauri uses Haiku, and hands hard problems to Sonnet through its `think_harder` tool. Only self-building

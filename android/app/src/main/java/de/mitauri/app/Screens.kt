@@ -250,6 +250,74 @@ fun DoorLoginScreen(onBack: () -> Unit) {
 }
 
 @Composable
+private fun switchColors() = SwitchDefaults.colors(
+    checkedTrackColor = MitauriColors.Accent,
+    checkedThumbColor = MitauriColors.AccentInk,
+    uncheckedTrackColor = MitauriColors.Raised,
+    uncheckedThumbColor = MitauriColors.Muted,
+    uncheckedBorderColor = MitauriColors.Muted,
+)
+
+@Composable
+fun ModulesScreen(onBack: () -> Unit) {
+    var items by remember { mutableStateOf<List<ModuleInfo>?>(null) }
+    var message by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) {
+        try {
+            items = withContext(Dispatchers.IO) { Mitauri.fetchModules() }
+        } catch (_: Exception) {
+            message = "The server can't be reached right now."
+        }
+    }
+    ModulesContent(items, message, onBack) { module, enabled ->
+        scope.launch {
+            try {
+                items = withContext(Dispatchers.IO) { Mitauri.setModule(module.name, enabled) }
+                message = null
+            } catch (_: Exception) {
+                message = "That change couldn't be saved."
+            }
+        }
+    }
+}
+
+@Composable
+fun ModulesContent(items: List<ModuleInfo>?, message: String?, onBack: () -> Unit, onChange: (ModuleInfo, Boolean) -> Unit) {
+    ScreenScaffold("Modules", onBack) {
+        Text(
+            "Switch off what you don't use. Mitauri loses its tools and stops any background work, so there's less it can reach.",
+            color = MitauriColors.Muted, style = MaterialTheme.typography.bodyMedium,
+        )
+        message?.let {
+            Spacer(Modifier.height(12.dp))
+            Text(it, color = MitauriColors.Danger, style = MaterialTheme.typography.bodyMedium)
+        }
+        Spacer(Modifier.height(18.dp))
+        if (items == null) {
+            Text("Loading…", color = MitauriColors.Muted)
+        } else {
+            Group {
+                items.forEachIndexed { index, module ->
+                    if (index > 0) Divider()
+                    ListRow(module.label, module.description) {
+                        if (module.required) {
+                            Text("Always on", color = MitauriColors.Muted, style = MaterialTheme.typography.labelMedium)
+                        } else {
+                            Switch(
+                                module.enabled,
+                                { onChange(module, it) },
+                                colors = switchColors(),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun NotificationAppsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     var allowed by remember { mutableStateOf(NotificationAccess.allowedApps(context)) }
@@ -281,7 +349,7 @@ fun NotificationAppsScreen(onBack: () -> Unit) {
                                 NotificationAccess.setAllowed(context, app, on)
                                 allowed = NotificationAccess.allowedApps(context)
                             },
-                            colors = SwitchDefaults.colors(checkedTrackColor = MitauriColors.Accent, checkedThumbColor = MitauriColors.AccentInk),
+                            colors = switchColors(),
                         )
                     }
                 }
@@ -605,6 +673,7 @@ fun SettingsScreen(
     onRestart: () -> Unit,
     onMemories: () -> Unit,
     onNotifications: () -> Unit,
+    onModules: () -> Unit,
     onDoorLogin: () -> Unit,
     doorLoginSet: Boolean,
     onDisconnect: () -> Unit,
@@ -634,6 +703,8 @@ fun SettingsScreen(
             Divider()
             ListRow("Notifications", "Which apps Mitauri may read", R.drawable.ic_bell, onClick = onNotifications) { Icon(R.drawable.ic_chevron, null, size = 20) }
         }
+        SectionLabel("Features")
+        Group { ListRow("Modules", "Switch features on and off", R.drawable.ic_settings, onClick = onModules) { Icon(R.drawable.ic_chevron, null, size = 20) } }
         SectionLabel("Setup")
         Group {
             items.forEachIndexed { index, item ->

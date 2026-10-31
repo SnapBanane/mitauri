@@ -6,7 +6,7 @@ import os
 import sys
 from urllib.request import Request, urlopen
 
-from . import proposals, wake
+from . import modules, proposals, wake
 from .api import Api, load_token
 from .auth import Devices
 from .chat_memory import ChatMemory
@@ -26,6 +26,9 @@ def main() -> None:
     commands.add_parser("pair", help="show the details to enter in the phone app")
     commands.add_parser("devices", help="list paired devices")
     commands.add_parser("unpair", help="remove a paired device").add_argument("device")
+    module_command = commands.add_parser("modules", help="list modules, or switch one on or off")
+    module_command.add_argument("action", choices=["list", "on", "off"], nargs="?", default="list")
+    module_command.add_argument("name", nargs="?")
     commands.add_parser("wake-test", help="play a test alarm on the speaker, once")
     commands.add_parser("wake-stop", help="stop an alarm that's playing")
     proposal = commands.add_parser("proposal", help="review changes Mitauri has suggested to itself")
@@ -54,6 +57,20 @@ def main() -> None:
     if args.command == "unpair":
         removed = Devices(config.data_dir).remove(args.device)
         print("Removed. Restart the server to end any open connection." if removed else "No such device.")
+        return
+
+    if args.command == "modules":
+        if args.action != "list":
+            if args.name is None:
+                raise SystemExit("Name the module: mitauri modules list")
+            try:
+                modules.set_enabled(config.data_dir, args.name, args.action == "on")
+            except KeyError:
+                raise SystemExit("No such module.")
+            except ValueError as error:
+                raise SystemExit(str(error))
+        for item in modules.listing(config.data_dir):
+            print("on " if item["enabled"] else "off", item["name"].ljust(14), item["description"])
         return
 
     if args.command == "wake-test":
@@ -110,7 +127,8 @@ def main() -> None:
     session = (config.data_dir / "session.txt")
     prune_transcripts(config.data_dir, {session.read_text()} if session.exists() else set())
     presence = Presence(load_key(config.data_dir))
-    presence.watch_serial(os.environ.get("MITAURI_PRESENCE_PORT", "/dev/ttyUSB0"))
+    if modules.is_enabled(config.data_dir, "presence"):
+        presence.watch_serial(os.environ.get("MITAURI_PRESENCE_PORT", "/dev/ttyUSB0"))
     history = ChatMemory(config.data_dir / "chat_memory.db")
     api = Api(brain, load_token(config.data_dir), config.data_dir, speech, memory, presence, history)
     bot = MitauriBot(int(user_id), Brain(config, memory, limited=True), reminders, config, api, brain, speech, memory)

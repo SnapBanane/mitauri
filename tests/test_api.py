@@ -338,9 +338,10 @@ def test_typed_door_command_goes_to_the_phone_without_claude(tmp_path):
 
 def test_claude_can_never_send_a_door_command(tmp_path):
     """Claude's only door tool asks the phone to open the fingerprint app, not to press the button."""
-    source = (Path(tools.__file__)).read_text()
-    assert "door_command" not in source
-    assert source.count('"/door"') == 1
+    folder = Path(tools.__file__).with_name("modules")
+    sources = "".join(path.read_text() for path in folder.glob("*.py"))
+    assert "door_command" not in sources
+    assert sources.count('"/door"') == 1
     assert 'self._ask_phone("open_door")' in Path(api_module.__file__).read_text()
 
 
@@ -412,6 +413,22 @@ def test_long_term_memory_can_only_be_cleared_by_the_phone(tmp_path):
         assert (await session.delete(f"{BASE}/long-term-memory", headers=INTERNAL)).status == 401
         path = "/long-term-memory"
         assert (await session.delete(f"{BASE}{path}", headers=signed("DELETE", path))).status == 200
+    with_api(test, tmp_path)
+
+
+def test_modules_are_changed_only_by_the_paired_phone_and_door_commands_follow_them(tmp_path):
+    async def test(session):
+        assert (await session.get(f"{BASE}/modules", headers=INTERNAL)).status == 401
+        body = json.dumps({"name": "door", "enabled": False}).encode()
+        assert (await session.post(f"{BASE}/modules", data=body, headers=INTERNAL)).status == 401
+        response = await session.post(f"{BASE}/modules", data=body, headers=signed("POST", "/modules", body))
+        assert {m["name"]: m["enabled"] for m in await response.json()}["door"] is False
+        for bad in ({"name": "core", "enabled": False}, {"name": "nope", "enabled": True}, {"name": "door", "enabled": "yes"}):
+            raw = json.dumps(bad).encode()
+            assert (await session.post(f"{BASE}/modules", data=raw, headers=signed("POST", "/modules", raw))).status == 400
+        async with connect(session) as socket:
+            await socket.send_json({"type": "message", "id": "1", "text": "Tür auf"})
+            assert (await socket.receive_json())["type"] == "reply"  # goes to Claude, not to the door
     with_api(test, tmp_path)
 
 

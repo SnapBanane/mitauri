@@ -10,7 +10,7 @@ import uuid
 
 from aiohttp import WSMsgType, web
 
-from . import wake
+from . import modules, wake
 from .audit import record
 from .auth import Devices, FailureLimiter
 from .brain import BrainError
@@ -131,6 +131,8 @@ class Api:
         app.router.add_delete("/memories/{id:[0-9]+}", self._on_delete_memory)
         app.router.add_post("/conversation/reset", self._on_reset_conversation)
         app.router.add_delete("/long-term-memory", self._on_clear_history)
+        app.router.add_get("/modules", self._on_list_modules)
+        app.router.add_post("/modules", self._on_set_module)
         self._runner = web.AppRunner(app, access_log=None)  # who asked what is nobody's log's business
         await self._runner.setup()
         for host in hosts:
@@ -192,6 +194,21 @@ class Api:
         record(self._data_dir, "memory_deleted", removed=removed)
         return web.json_response({"removed": removed})
 
+    async def _on_list_modules(self, _: web.Request) -> web.Response:
+        return web.json_response(modules.listing(self._data_dir))
+
+    async def _on_set_module(self, request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+            name, enabled = str(data["name"]), data["enabled"]
+            if not isinstance(enabled, bool):
+                raise TypeError
+            modules.set_enabled(self._data_dir, name, enabled)
+        except (ValueError, KeyError, TypeError):
+            raise web.HTTPBadRequest() from None
+        record(self._data_dir, "module_changed", name=name, enabled=enabled)
+        return web.json_response(modules.listing(self._data_dir))
+
     async def _on_clear_history(self, _: web.Request) -> web.Response:
         if self._history:
             await asyncio.to_thread(self._history.clear)
@@ -199,7 +216,7 @@ class Api:
         return web.json_response({"cleared": True})
 
     def _remember(self, you: str, reply: str) -> None:
-        if self._history and reply:
+        if self._history and reply and modules.is_enabled(self._data_dir, "history"):
             task = asyncio.create_task(asyncio.to_thread(self._history.add, you, reply))
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
@@ -247,7 +264,7 @@ class Api:
                 future.set_result(data)
 
     async def _answer(self, socket: web.WebSocketResponse, message_id: str, text: str) -> None:
-        if is_door_command(text):
+        if is_door_command(text) and modules.is_enabled(self._data_dir, "door"):
             # Goes straight to the phone. Claude isn't involved, so nothing it reads can trigger this.
             record(self._data_dir, "door_command", via="text")
             if not socket.closed:
@@ -307,7 +324,7 @@ class Api:
         if wake.is_ringing(self._data_dir) and is_stop_command(transcript):
             wake.request_stop(self._data_dir)
             reply = "Wecker aus."
-        elif is_door_command(transcript):
+        elif is_door_command(transcript) and modules.is_enabled(self._data_dir, "door"):
             record(self._data_dir, "door_command", via="voice")
             await phone.send({"door": True})
         elif transcript:

@@ -36,6 +36,18 @@ class ScreenshotTest {
     @Test fun chatEmpty() = show { chat(emptyList()) }
     @Test fun chatConversation() = show { chat(conversation, draft = "Danke!", waiting = true) }
 
+    @Test fun modules() = show {
+        ModulesContent(
+            listOf(
+                ModuleInfo("core", "Core", "Memory, reminders and deeper thinking", true, true),
+                ModuleInfo("door", "Door", "Opening the door", false, true),
+                ModuleInfo("stocks", "Stocks", "Share prices", false, false),
+                ModuleInfo("school", "School", "WebUntis timetable and the wake-up alarm", false, true),
+            ),
+            null, {}, { _, _ -> },
+        )
+    }
+
     @Test fun settings() = show {
         SettingsScreen(
             listOf(
@@ -44,7 +56,7 @@ class ScreenshotTest {
                 SetupItem("Background location", "Choose Allow all the time", false, required = false) {},
                 SetupItem("Autostart", "On Xiaomi: turn on Autostart for Mitauri", null) {},
             ),
-            {}, {}, {}, {}, false, {}, {},
+            {}, {}, {}, {}, {}, false, {}, {},
         )
     }
 }

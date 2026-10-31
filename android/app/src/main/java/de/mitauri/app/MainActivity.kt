@@ -127,11 +127,13 @@ class MainActivity : FragmentActivity() {
                     var showMemories by remember { mutableStateOf(false) }
                     var showNotifications by remember { mutableStateOf(false) }
                     var showDoorLogin by remember { mutableStateOf(false) }
+                    var showModules by remember { mutableStateOf(false) }
                     BackHandler(showSettings) {
                         when {
                             showMemories -> showMemories = false
                             showNotifications -> showNotifications = false
                             showDoorLogin -> showDoorLogin = false
+                            showModules -> showModules = false
                             else -> showSettings = false
                         }
                     }
@@ -140,11 +142,13 @@ class MainActivity : FragmentActivity() {
                         showMemories -> MemoryScreen { showMemories = false }
                         showNotifications -> NotificationAppsScreen { showNotifications = false }
                         showDoorLogin -> DoorLoginScreen { showDoorLogin = false }
+                        showModules -> ModulesScreen { showModules = false }
                         showSettings -> SettingsScreen(
                             setupItems(refresh),
                             ::restartApp,
                             { confirmIdentity("Memories and privacy") { showMemories = true } },
                             { confirmIdentity("Notifications") { showNotifications = true } },
+                            { confirmIdentity("Modules") { showModules = true } },
                             { confirmIdentity("Door login") { showDoorLogin = true } },
                             DoorLogin.isSet(this),
                             { confirmIdentity("Disconnect from this server") { Mitauri.unpair() } },

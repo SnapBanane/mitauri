@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 import discord
 
-from . import proposals, research, transit, untis, wake, wake_planner, weather
+from . import modules, proposals, research, transit, untis, wake, wake_planner, weather
 from .audit import record
 from .brain import Brain, BrainError
 from .config import Config
@@ -130,7 +130,7 @@ class MitauriBot(discord.Client):
 
     async def _check_school_wake(self, now: datetime) -> None:
         settings = wake.load_settings(self._data_dir)
-        if not settings["enabled"]:
+        if not settings["enabled"] or not modules.is_enabled(self._data_dir, "school"):
             return
         if time_module.monotonic() >= self._next_timetable_check:
             self._next_timetable_check = time_module.monotonic() + TIMETABLE_CHECK_SECONDS

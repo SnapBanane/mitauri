@@ -32,6 +32,8 @@ import java.util.concurrent.TimeUnit
 
 data class Memory(val id: Int, val text: String)
 
+data class ModuleInfo(val name: String, val label: String, val description: String, val required: Boolean, val enabled: Boolean)
+
 data class ChatMessage(val text: String, val fromUser: Boolean)
 
 enum class Status { DISCONNECTED, CONNECTING, CONNECTED, REJECTED }
@@ -165,6 +167,31 @@ object Mitauri {
     /** Call off the main thread. */
     fun deleteMemory(id: Int) {
         slowClient.newCall(signedRequest("memories/$id", "DELETE", ByteArray(0)).build()).execute().close()
+    }
+
+    /** Call off the main thread. */
+    fun fetchModules(): List<ModuleInfo> {
+        slowClient.newCall(signedRequest("modules", "GET", ByteArray(0)).build()).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("Server returned ${response.code}")
+            return parseModules(response.body!!.string())
+        }
+    }
+
+    /** Call off the main thread. */
+    fun setModule(name: String, enabled: Boolean): List<ModuleInfo> {
+        val body = JSONObject().put("name", name).put("enabled", enabled).toString().toByteArray()
+        slowClient.newCall(signedRequest("modules", "POST", body).build()).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("Server returned ${response.code}")
+            return parseModules(response.body!!.string())
+        }
+    }
+
+    private fun parseModules(text: String): List<ModuleInfo> {
+        val items = JSONArray(text)
+        return (0 until items.length()).map {
+            val item = items.getJSONObject(it)
+            ModuleInfo(item.getString("name"), item.getString("label"), item.getString("description"), item.getBoolean("required"), item.getBoolean("enabled"))
+        }
     }
 
     /** Call off the main thread. */
