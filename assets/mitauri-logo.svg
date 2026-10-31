@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 224" role="img" aria-label="mitauri">
+  <title>mitauri</title>
+  <!-- android/app/src/main/res/drawable/logo_mitauri.xml has the same shapes. Keep them in step. -->
+  <!-- The wordmark is drawn as lines, so it looks the same without any font installed. -->
+  <path fill="#D9C08F" d="M72,62 C48,62 24,52 20,22 C36,40 54,44 78,44 Z" />
+  <path fill="#D9C08F" d="M128,62 C152,62 176,52 180,22 C164,40 146,44 122,44 Z" />
+  <path fill="#A34F1E" d="M58,72 C44,64 26,68 20,82 C34,92 52,90 62,84 Z" />
+  <path fill="#A34F1E" d="M142,72 C156,64 174,68 180,82 C166,92 148,90 138,84 Z" />
+  <path fill="#A34F1E" d="M60,118 C52,134 52,150 56,156 L144,156 C148,150 148,134 140,118 Z" />
+  <path fill="#F5E6C8" d="M54,154 C54,142 88,142 88,154 C88,166 54,166 54,154 Z" />
+  <path fill="#F5E6C8" d="M112,154 C112,142 146,142 146,154 C146,166 112,166 112,154 Z" />
+  <path fill="none" stroke="#C9A777" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" d="M65,153 L65,160 M77,153 L77,160 M123,153 L123,160 M135,153 L135,160" />
+  <path fill="#C8662A" d="M60,62 C70,46 130,46 140,62 C148,78 146,100 138,114 C130,132 118,142 100,142 C82,142 70,132 62,114 C54,100 52,78 60,62 Z" />
+  <path fill="#3A2012" d="M73,92 a7,7 0 1,0 14,0 a7,7 0 1,0 -14,0 Z" />
+  <path fill="#3A2012" d="M113,92 a7,7 0 1,0 14,0 a7,7 0 1,0 -14,0 Z" />
+  <path fill="#F5E6C8" d="M72,112 C72,100 128,100 128,112 C130,130 116,140 100,140 C84,140 70,130 72,112 Z" />
+  <path fill="#3A2012" d="M88,113 a3.5,3.5 0 1,0 7,0 a3.5,3.5 0 1,0 -7,0 Z" />
+  <path fill="#3A2012" d="M105,113 a3.5,3.5 0 1,0 7,0 a3.5,3.5 0 1,0 -7,0 Z" />
+  <path fill="none" stroke="#3A2012" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" d="M86,124 C92,132 108,132 114,124" />
+  <path fill="#A34F1E" d="M54,74 C50,58 62,48 70,46 C68,40 74,34 82,34 C84,28 94,24 100,30 C106,24 116,28 118,34 C126,34 132,40 130,46 C138,48 150,58 146,74 C145,84 142,92 136,100 C134,94 132,91 129,89 C124,91 116,90 110,88 C109,94 106,98 102,102 C99,97 94,92 90,88 C84,90 76,91 71,89 C68,91 66,94 64,100 C58,92 55,84 54,74 Z" />
+  <path fill="none" stroke="#E08A45" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" d="M84,46 C80,56 78,64 76,74 M100,42 C98,54 100,66 98,80 M116,46 C120,56 122,64 124,74" />
+  <path fill="none" stroke="#D9792F" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" d="M17,192 V214 M17,201 C17,189 32,189 32,201 V214 M32,201 C32,189 47,189 47,201 V214 M59,192 V214 M59,180 L59,180.1 M75,181 V207 C75,213 79,215 85,213 M67,192 H84 M114,203 a11,11 0 1,1 -22,0 a11,11 0 1,1 22,0 Z M114,192 V214 M126,192 V204 C126,217 145,217 145,204 M145,192 V214 M157,192 V214 M157,202 C157,194 163,191 170,192 M182,192 V214 M182,180 L182,180.1" />
+</svg>

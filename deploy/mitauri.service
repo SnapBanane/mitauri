@@ -1,0 +1,15 @@
+[Unit]
+Description=Mitauri personal assistant
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=%h/dev/mitauri
+# systemd has a minimal PATH, so add wherever `which claude` points on this device.
+Environment=PATH=%h/.local/bin:%h/.local/share/mise/installs/claude/latest:/usr/bin
+ExecStart=%h/.local/bin/uv run mitauri run
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
