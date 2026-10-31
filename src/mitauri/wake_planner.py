@@ -62,7 +62,7 @@ def decide(day: date, first_lesson: int, lessons: list[dict], facts: list[str], 
     prompt = PROMPT.format(
         day=day.strftime("%A %Y-%m-%d"),
         facts="\n".join(f"- {fact}" for fact in facts) or "(none)",
-        lessons="\n".join(f"- {l['start']} {', '.join(l['subject'])} room {', '.join(str(r) for r in l['room'])}" for l in lessons),
+        lessons="\n".join(f"- {l['start']} subject {', '.join(l['subject'])} | room {', '.join(str(r) for r in l['room'])} | teacher {', '.join(str(t) for t in l['teacher'])}" for l in lessons),
         fallback=f"{minutes_before} minutes before the first lesson",
     )
     try:
@@ -74,6 +74,21 @@ def decide(day: date, first_lesson: int, lessons: list[dict], facts: list[str], 
     except (OSError, subprocess.TimeoutExpired):
         return None
     return parse_decision(result.stdout, first_lesson) if result.returncode == 0 else None
+
+
+def ensure_plan(data_dir: Path, lessons: list[dict], day: date, first: int, facts: list[str], minutes_before: int) -> tuple[dict | None, bool]:
+    """Returns the plan for a day, and whether it's a new time. Asks only if the rules or that day's lessons changed."""
+    details = active_day(lessons, day)
+    key = plan_key(first, facts, details)
+    saved = load_plans(data_dir).get(day.isoformat())
+    if saved and saved.get("key") == key:
+        return saved, False
+    decision = decide(day, first, details, facts, minutes_before, data_dir)
+    if decision is None:
+        return None, False
+    plan = {**decision, "first": first, "key": key}
+    save_plan(data_dir, day, plan)
+    return plan, not (saved and saved.get("wake") == plan["wake"])
 
 
 def load_plans(data_dir: Path) -> dict:

@@ -1041,6 +1041,34 @@ def test_plan_asks_again_only_when_something_changed_and_failure_keeps_the_setti
     assert len(asks) == 3 and len(phone.sent) == 1  # asked again, but the same time isn't news
 
 
+def test_planner_sees_the_teacher_field_where_hgh_appears():
+    entry = {**lesson(20261103, 755), "te": [{"name": "HGH 2"}]}
+    assert untis.describe_day([entry], date(2026, 11, 3))[0]["teacher"] == ["HGH 2"]
+    seen = {}
+
+    def fake_run(command, input, **kwargs):
+        seen["prompt"] = input
+        return SimpleNamespace(returncode=0, stdout='{"wake": "06:50", "why": "HGH"}')
+
+    original = wake_planner.subprocess.run
+    wake_planner.subprocess.run = fake_run
+    try:
+        wake_planner.decide(date(2026, 11, 3), 755, wake_planner.active_day([entry], date(2026, 11, 3)), [], 90, Path("."))
+    finally:
+        wake_planner.subprocess.run = original
+    assert "HGH 2" in seen["prompt"]
+
+
+def test_next_wake_tool_answers_with_the_rules_even_while_the_alarm_is_off(tmp_path, monkeypatch):
+    monkeypatch.setenv("MITAURI_DATA_DIR", str(tmp_path))
+    day = datetime.now(BERLIN).date() + timedelta(days=1)
+    monkeypatch.setattr(untis, "upcoming", lambda *a: [lesson(int(day.strftime("%Y%m%d")), 950)])
+    monkeypatch.setattr(wake_planner, "decide", lambda *a: {"wake": "09:00", "why": "Regel"})
+    answer = tools.next_school_wake()
+    assert answer["settings"]["enabled"] is False
+    assert "T09:00" in answer["next"]["wake"]
+
+
 def test_long_term_memory_is_not_on_discord():
     assert "search_past_chats" not in tools.LIMITED_TOOLS
 

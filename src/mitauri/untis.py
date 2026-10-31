@@ -93,6 +93,7 @@ def describe_day(lessons: list[dict], day: date) -> list[dict]:
             "end": format_time(lesson["endTime"]),
             "subject": names(lesson.get("su")),
             "room": [r.get("name") for r in lesson.get("ro") or []],
+            "teacher": [t.get("name") for t in lesson.get("te") or []],
             "cancelled": lesson.get("code") == "cancelled",
             "note": lesson.get("lstext") or lesson.get("substText"),
         }

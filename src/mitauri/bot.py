@@ -162,20 +162,13 @@ class MitauriBot(discord.Client):
         day = upcoming[0]
         first = self._first_lessons[day]
         facts = [text for _, text in self._facts.all()]
-        details = wake_planner.active_day(lessons, day)
-        key = wake_planner.plan_key(first, facts, details)
-        saved = wake_planner.load_plans(self._data_dir).get(day.isoformat())
-        if saved and saved.get("key") == key:
-            return
-        decision = await asyncio.to_thread(
-            wake_planner.decide, day, first, details, facts, settings["minutes_before"], self._data_dir,
+        plan, changed = await asyncio.to_thread(
+            wake_planner.ensure_plan, self._data_dir, lessons, day, first, facts, settings["minutes_before"],
         )
-        if decision is None:  # keeps the plain setting, and tries again at the next check
+        if plan is None:  # keeps the plain setting, and tries again at the next check
             log.warning("Couldn't work out a wake-up time from the rules")
-            return
-        wake_planner.save_plan(self._data_dir, day, {**decision, "first": first, "key": key})
-        if not (saved and saved.get("wake") == decision["wake"]) and self._phone:
-            await self._phone.deliver("notify", f"Wecker am {day.strftime('%d.%m.')}: {decision['wake']} Uhr. {decision['why']}")
+        elif changed and self._phone:
+            await self._phone.deliver("notify", f"Wecker am {day.strftime('%d.%m.')}: {plan['wake']} Uhr. {plan['why']}")
 
     async def _sound_school_wake(self, plan: dict, settings: dict) -> None:
         text = wake.alarm_text(plan["lesson"])

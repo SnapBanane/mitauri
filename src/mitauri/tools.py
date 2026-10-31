@@ -415,11 +415,18 @@ def next_school_wake() -> dict:
     settings = wake.load_settings(data_dir())
     try:
         now = datetime.now(ZoneInfo("Europe/Berlin"))
-        firsts = untis.first_lessons(untis.upcoming(data_dir(), now.date()))
+        lessons = untis.upcoming(data_dir(), now.date())
+        firsts = untis.first_lessons(lessons)
     except untis.UntisError as error:
         return {"error": str(error), "settings": settings}
     except (OSError, ValueError, KeyError, TypeError):
         return {"error": "WebUntis couldn't be reached.", "settings": settings}
+    # The same reasoning as the alarm itself, so this answer is the time it would really use.
+    for day in sorted(firsts):
+        if day >= now.date():
+            facts = [text for _, text in Memory(data_dir() / "memory.db").all()]
+            wake_planner.ensure_plan(data_dir(), lessons, day, firsts[day], facts, settings["minutes_before"])
+            break
     plan = wake.next_wake(firsts, now, settings["minutes_before"], chosen=wake_planner.load_plans(data_dir()))
     return {
         "settings": settings,
