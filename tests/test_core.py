@@ -1,10 +1,11 @@
 import asyncio
 import importlib.util
+import io
 import json
 import os
 import stat
 import time as clock
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
@@ -16,7 +17,7 @@ from mitauri.bot import MAX_MESSAGE_LENGTH, MitauriBot, briefing_due, is_from_ow
 from mitauri.reminders import CALL, TRIP, Reminders
 from mitauri.tools import route_url
 from mitauri.brain import Brain, BrainError, prune_transcripts, transcript_dir
-from mitauri import geo, proposals, research, stocks, tools, transit, weather
+from mitauri import geo, proposals, research, stocks, tools, transit, untis, wake, weather
 from mitauri import presence as presence_module
 from mitauri.transit import best_trip, describe_trip, parse_departures
 from mitauri.config import Config, load_token, lock_down, move_secrets, new_token
@@ -789,6 +790,106 @@ def test_proposal_copy_skips_firmware_build_output(tmp_path):
     (project / "firmware" / ".pio" / "x" / "big").write_text("x")
     (project / "firmware" / "main.cpp").write_text("y")
     assert [str(f) for f in proposals.project_files(project)] == ["firmware/main.cpp"]
+
+
+def lesson(day, start, code=""):
+    return {"date": day, "startTime": start, "endTime": start + 45, "code": code, "su": [{"name": "M", "longname": "Mathe"}], "ro": [{"name": "A1"}]}
+
+
+BERLIN = ZoneInfo("Europe/Berlin")
+
+
+def test_a_cancelled_first_lesson_means_a_later_start():
+    lessons = [lesson(20261102, 755, "cancelled"), lesson(20261102, 950), lesson(20261103, 755), lesson(20261104, 800, "cancelled")]
+    assert untis.first_lessons(lessons) == {date(2026, 11, 2): 950, date(2026, 11, 3): 755}
+
+
+def test_next_wake_picks_the_next_school_day_and_skips_fired_and_past():
+    firsts = {date(2026, 11, 2): 950, date(2026, 11, 3): 755}
+    evening = datetime(2026, 11, 1, 20, 0, tzinfo=BERLIN)
+    plan = wake.next_wake(firsts, evening, 90)
+    assert plan["wake"] == datetime(2026, 11, 2, 8, 20, tzinfo=BERLIN)
+    just_after = datetime(2026, 11, 2, 8, 25, tzinfo=BERLIN)
+    assert wake.next_wake(firsts, just_after, 90)["day"] == date(2026, 11, 2)
+    assert wake.next_wake(firsts, just_after, 90, fired=date(2026, 11, 2))["day"] == date(2026, 11, 3)
+    much_later = datetime(2026, 11, 2, 9, 0, tzinfo=BERLIN)
+    assert wake.next_wake(firsts, much_later, 90)["day"] == date(2026, 11, 3)
+    assert wake.next_wake({}, evening, 90) is None
+
+
+def test_wake_is_off_by_default_and_settings_are_limited(tmp_path):
+    assert wake.load_settings(tmp_path)["enabled"] is False
+    saved = wake.save_settings(tmp_path, minutes_before=1, volume=9)
+    assert saved["minutes_before"] == wake.MIN_MINUTES_BEFORE and saved["volume"] == 1.0
+    assert wake.save_settings(tmp_path, enabled=True)["minutes_before"] == wake.MIN_MINUTES_BEFORE
+
+
+def school_bot(tmp_path, monkeypatch, phone, lessons, now_text="08:20"):
+    bot, _ = bot_with_phone(tmp_path, phone)
+    monkeypatch.setattr(untis, "upcoming", lambda *a: lessons)
+    return bot
+
+
+def test_bot_stays_silent_when_the_wake_is_off(tmp_path, monkeypatch):
+    phone = FakePhone(True)
+    bot = school_bot(tmp_path, monkeypatch, phone, [lesson(20261102, 950)])
+    asked = []
+    monkeypatch.setattr(untis, "upcoming", lambda *a: asked.append(1) or [])
+    asyncio.run(bot._check_school_wake(datetime(2026, 11, 2, 8, 20, tzinfo=BERLIN)))
+    assert asked == [] and phone.sent == []
+
+
+def test_bot_fires_once_and_rings_the_phone_if_the_speaker_fails(tmp_path, monkeypatch):
+    phone = FakePhone(True)
+    bot = school_bot(tmp_path, monkeypatch, phone, [lesson(20261102, 950)])
+    wake.save_settings(tmp_path, enabled=True, minutes_before=90)
+    bot._speech = SimpleNamespace(synthesize=lambda text, language: b"")
+
+    async def go():
+        moment = datetime(2026, 11, 2, 8, 21, tzinfo=BERLIN)
+        await bot._check_school_wake(datetime(2026, 11, 2, 7, 0, tzinfo=BERLIN))
+        assert bot._wake_task is None
+        await bot._check_school_wake(moment)
+        first = bot._wake_task
+        await first
+        await bot._check_school_wake(moment)
+        assert bot._wake_task is first
+
+    asyncio.run(go())
+    assert [kind for kind, _ in phone.sent] == ["ring"]
+    assert "9 Uhr 50" in phone.sent[0][1]
+
+
+def test_failed_login_is_never_retried_until_the_login_changes(tmp_path, monkeypatch):
+    (tmp_path / "secrets.env").write_text("MITAURI_WEBUNTIS_SERVER=x.example\nMITAURI_WEBUNTIS_SCHOOL=s\nMITAURI_WEBUNTIS_USER=u\nMITAURI_WEBUNTIS_PASSWORD=hunter2\n")
+    calls = []
+
+    class Opener:
+        def open(self, request, timeout):
+            calls.append(request)
+            return io.BytesIO(json.dumps({"error": {"code": -8504, "message": "bad"}}).encode())
+
+    monkeypatch.setattr(untis, "build_opener", lambda *a: Opener())
+    with pytest.raises(untis.UntisError, match="refused"):
+        untis.fetch_lessons(tmp_path, date(2026, 11, 2), date(2026, 11, 2))
+    with pytest.raises(untis.UntisError, match="won't be tried") as caught:
+        untis.fetch_lessons(tmp_path, date(2026, 11, 2), date(2026, 11, 2))
+    assert len(calls) == 1 and "hunter2" not in str(caught.value)
+    (tmp_path / "secrets.env").write_text("MITAURI_WEBUNTIS_SERVER=x.example\nMITAURI_WEBUNTIS_SCHOOL=s\nMITAURI_WEBUNTIS_USER=u\nMITAURI_WEBUNTIS_PASSWORD=new\n")
+    os.utime(tmp_path / "secrets.env", (1, 1))
+    with pytest.raises(untis.UntisError, match="refused"):
+        untis.fetch_lessons(tmp_path, date(2026, 11, 2), date(2026, 11, 2))
+    assert len(calls) == 2
+
+
+def test_school_tools_are_not_on_discord():
+    assert not tools.LIMITED_TOOLS & {"school_timetable", "next_school_wake", "set_school_wake"}
+
+
+def test_day_description_marks_cancelled_and_names_subjects():
+    described = untis.describe_day([lesson(20261102, 950), lesson(20261102, 755, "cancelled"), lesson(20261103, 755)], date(2026, 11, 2))
+    assert [(d["start"], d["cancelled"]) for d in described] == [("07:55", True), ("09:50", False)]
+    assert described[0]["subject"] == ["Mathe"]
 
 
 def test_split_message():

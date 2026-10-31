@@ -115,6 +115,20 @@ opens in the Maps app when tapped. "Wie weit ist es zum nächsten Rewe?" searche
 straight-line distances and typical road times, with no live traffic. These are free public services that
 ask for light use. They receive your search text and, when you ask for something nearby, a rough position.
 
+## School timetable and wake-up
+
+Add your WebUntis login to `secrets.env`, as `MITAURI_WEBUNTIS_SERVER`, `_SCHOOL`, `_USER` and `_PASSWORD`.
+"Was habe ich morgen?" reads the timetable. A refused login isn't retried until you change it, as repeated
+failures could lock your school account.
+
+"Weck mich 90 Minuten vor der ersten Stunde" turns on the wake-up. It skips cancelled lessons, and rechecks every
+30 minutes. Google has no public alarm API for Nest, so it plays spoken audio on the speaker over Wi-Fi, then
+rings the phone 3 minutes later, or straight away if the speaker fails. It's off by default, and only works
+while the server is running on the same Wi-Fi as the speaker, so keep a phone alarm for anything important.
+The speaker fetches the audio from this machine on port 8767, which is open only while the alarm plays and
+serves one secret address. If you use a firewall, allow that port from your own network, such as
+`sudo ufw allow from 192.168.0.0/16 to any port 8767 proto tcp`. Try the speaker with `mitauri wake-test`.
+
 ## Stocks
 
 "Wie steht die SAP-Aktie?" gets a possibly delayed price from Yahoo Finance's public chart data, with no

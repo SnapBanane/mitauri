@@ -4,7 +4,7 @@ import logging
 import os
 import sys
 
-from . import proposals
+from . import proposals, wake
 from .api import Api, load_token
 from .auth import Devices
 from .brain import Brain, BrainError, prune_transcripts
@@ -23,6 +23,7 @@ def main() -> None:
     commands.add_parser("pair", help="show the details to enter in the phone app")
     commands.add_parser("devices", help="list paired devices")
     commands.add_parser("unpair", help="remove a paired device").add_argument("device")
+    commands.add_parser("wake-test", help="play a test alarm on the speaker, once")
     proposal = commands.add_parser("proposal", help="review changes Mitauri has suggested to itself")
     proposal.add_argument("action", choices=["list", "show", "apply", "discard"])
     proposal.add_argument("id", nargs="?")
@@ -49,6 +50,14 @@ def main() -> None:
     if args.command == "unpair":
         removed = Devices(config.data_dir).remove(args.device)
         print("Removed. Restart the server to end any open connection." if removed else "No such device.")
+        return
+
+    if args.command == "wake-test":
+        # Only here, in a terminal: it's loud, and it may be in a bedroom.
+        settings = wake.load_settings(config.data_dir)
+        audio = Speech(config.data_dir).synthesize("Das ist ein Test von Mitauri. Guten Morgen!", "de")
+        wake.play(settings["device"], audio, wake.wav_seconds(audio), settings["volume"], repeats=1)
+        print("Played on", settings["device"])
         return
 
     if args.command == "proposal":
@@ -84,7 +93,7 @@ def main() -> None:
     presence = Presence(load_key(config.data_dir))
     presence.watch_serial(os.environ.get("MITAURI_PRESENCE_PORT", "/dev/ttyUSB0"))
     api = Api(brain, load_token(config.data_dir), config.data_dir, speech, memory, presence)
-    bot = MitauriBot(int(user_id), Brain(config, memory, limited=True), reminders, config, api, brain)
+    bot = MitauriBot(int(user_id), Brain(config, memory, limited=True), reminders, config, api, brain, speech)
     try:
         asyncio.run(serve(bot, token, api, brain))
     except KeyboardInterrupt:

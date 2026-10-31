@@ -1,12 +1,13 @@
 import asyncio
 import json
 import logging
+import time as time_module
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import discord
 
-from . import proposals, research, transit, weather
+from . import proposals, research, transit, untis, wake, weather
 from .audit import record
 from .brain import Brain, BrainError
 from .config import Config
@@ -15,6 +16,8 @@ from .reminders import CALL, TRIP, Reminders
 MAX_MESSAGE_LENGTH = 2000
 CHECK_INTERVAL_SECONDS = 5
 MAX_CALL_LATENESS_SECONDS = 900
+TIMETABLE_CHECK_SECONDS = 1800
+PHONE_BACKUP_DELAY_SECONDS = 180
 BRIEFING_WINDOW = timedelta(hours=3)  # a much later briefing is no use, so skip that day
 BRIEFING_PROMPT = (
     "Give me my morning briefing: today's calendar events and my open tasks, especially any due "
@@ -39,7 +42,7 @@ def briefing_due(now: datetime, at: time, last_date: str | None) -> bool:
 
 
 class MitauriBot(discord.Client):
-    def __init__(self, owner_id: int, brain: Brain, reminders: Reminders, config: Config, phone=None, briefing_brain=None):
+    def __init__(self, owner_id: int, brain: Brain, reminders: Reminders, config: Config, phone=None, briefing_brain=None, speech=None):
         # Direct messages to a bot include their text without any privileged intent.
         intents = discord.Intents.none()
         intents.dm_messages = True
@@ -48,6 +51,11 @@ class MitauriBot(discord.Client):
         self._brain = brain
         self._reminders = reminders
         self._phone = phone
+        self._speech = speech
+        self._first_lessons = {}
+        self._next_timetable_check = 0.0
+        self._warned_timetable = False
+        self._wake_task = None
         self._briefing_brain = briefing_brain or brain
         self._told_unreachable: set[int] = set()
         self._data_dir = config.data_dir
@@ -108,6 +116,7 @@ class MitauriBot(discord.Client):
                 await self._send_to_owner("⏰ Ich habe etwas für dich, aber dein Handy ist nicht erreichbar. Öffne die Mitauri-App.")
                 self._told_unreachable.add(reminder_id)
                 record(self._data_dir, "delivery_waiting", kind=kind)
+        await self._check_school_wake(now)
         await self._report_proposals()
         await self._report_research()
         if self._briefing_time and briefing_due(now, self._briefing_time, self._last_briefing()):
@@ -116,6 +125,44 @@ class MitauriBot(discord.Client):
             # Your calendar doesn't belong on Discord, so the briefing only goes to the phone.
             if self._phone:
                 await self._phone.deliver("notify", await self._ask_for_briefing())
+
+    async def _check_school_wake(self, now: datetime) -> None:
+        settings = wake.load_settings(self._data_dir)
+        if not settings["enabled"]:
+            return
+        if time_module.monotonic() >= self._next_timetable_check:
+            self._next_timetable_check = time_module.monotonic() + TIMETABLE_CHECK_SECONDS
+            try:
+                lessons = await asyncio.to_thread(untis.upcoming, self._data_dir, now.date())
+                self._first_lessons = untis.first_lessons(lessons)
+            except (untis.UntisError, OSError, ValueError, KeyError, TypeError) as error:
+                # An older timetable is still better than no alarm, and failing silently isn't an option.
+                log.warning("Couldn't update the timetable: %s", error)
+                if not self._warned_timetable and self._phone:
+                    self._warned_timetable = await self._phone.deliver("notify", "Stundenplan konnte nicht geladen werden. Stell dir sicherheitshalber einen Wecker.")
+            else:
+                self._warned_timetable = False
+        fired = now.date() if wake.already_fired(self._data_dir, now.date()) else None
+        plan = wake.next_wake(self._first_lessons, now, settings["minutes_before"], fired)
+        if plan and plan["day"] == now.date() and plan["wake"] <= now:
+            wake.mark_fired(self._data_dir, now.date())
+            record(self._data_dir, "school_wake")
+            task = asyncio.create_task(self._sound_school_wake(plan, settings))
+            self._wake_task = task
+
+    async def _sound_school_wake(self, plan: dict, settings: dict) -> None:
+        text = wake.alarm_text(plan["lesson"])
+        ring_soon = settings["phone_backup"]
+        try:
+            audio = await asyncio.to_thread(self._speech.synthesize, text, "de")
+            await asyncio.to_thread(wake.play, settings["device"], audio, wake.wav_seconds(audio), settings["volume"])
+        except Exception:  # whatever went wrong with the speaker, the phone still has to ring
+            log.exception("The speaker alarm failed")
+            ring_soon = True
+        else:
+            await asyncio.sleep(PHONE_BACKUP_DELAY_SECONDS)
+        if ring_soon and self._phone:
+            await self._phone.deliver("ring", text)
 
     async def _report_research(self) -> None:
         for job in research.unreported(self._data_dir):

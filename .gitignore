@@ -21,3 +21,5 @@ claude-errors*.log
 phone-chat-backup.json
 .pio/
 presence_key
+wake.json
+untis_login_failed
