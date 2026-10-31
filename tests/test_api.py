@@ -362,6 +362,20 @@ def test_place_reminder_goes_to_the_phone_and_needs_the_internal_token(tmp_path)
     assert "Milch" not in log and "48.1" not in log
 
 
+def test_presence_status_is_internal_and_key_needs_a_paired_device(tmp_path):
+    async def test(session):
+        assert (await session.get(f"{BASE}/presence")).status == 401
+        assert (await session.get(f"{BASE}/presence-key")).status == 401
+        response = await session.get(f"{BASE}/presence", headers=INTERNAL)
+        assert (await response.json())["state"] == "unknown"
+        response = await session.get(f"{BASE}/presence-key", headers=signed("GET", "/presence-key"))
+        assert len((await response.json())["key"]) == 64
+    with_api(test, tmp_path)
+    assert "presence_key" not in str(tmp_path) or (tmp_path / "presence_key").stat().st_mode & 0o077 == 0
+    key = (tmp_path / "presence_key").read_text()
+    assert key not in (tmp_path / "audit.log").read_text()
+
+
 def test_voice_returns_transcript_and_reply(tmp_path):
     async def test(session):
         response = await session.post(f"{BASE}/voice", data=b"audio", headers=signed("POST", "/voice", b"audio"))

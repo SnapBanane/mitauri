@@ -82,7 +82,7 @@ It adds a tip to take an umbrella if rain is likely in the next two hours.
 
 "Erinnere mich an die Milch, wenn ich beim Rewe in Schwabing bin" notifies you on arrival. It needs
 background location ("Allow all the time") and reminders live encrypted on the phone, so the server doesn't
-learn when you arrive. Place lookups go to VRR's service. Name the place with its city, and check which
+learn when you arrive. Place lookups use OpenStreetMap. Name the place with its city, or ask for the nearest one, and check which
 branch Mitauri says it found.
 
 ## Photos
@@ -111,7 +111,20 @@ Applying only works from an interactive terminal, so nothing on the phone can ch
 ## Directions
 
 Ask for a route, like "route to Hamburg Hauptbahnhof by train". Mitauri sends a Google Maps link that
-opens in the Maps app when tapped. It needs no API key, and Mitauri can't see travel times.
+opens in the Maps app when tapped. "Wie weit ist es zum nächsten Rewe?" searches OpenStreetMap for places,
+straight-line distances and typical road times, with no live traffic. These are free public services that
+ask for light use. They receive your search text and, when you ask for something nearby, a rough position.
+
+## Stocks
+
+"Wie steht die SAP-Aktie?" gets a delayed price from Stooq, with no account. Only the symbols are sent.
+
+## Presence sensor
+
+`firmware/presence` makes an ESP32 listen for a Bluetooth beacon from the app and report it over USB. The
+beacon's token changes every 5 minutes, and only your server has the key, so nobody else can track it or
+fake it. Sightings stay in memory and are never saved. Distance is rough, and being away looks the same as
+Bluetooth being off. Build and flash with `pio run -t upload` in that folder.
 
 ## Phone app
 

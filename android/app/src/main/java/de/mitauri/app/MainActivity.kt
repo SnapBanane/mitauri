@@ -103,7 +103,10 @@ import kotlinx.coroutines.withContext
 
 class MainActivity : FragmentActivity() {
     private val askPermissions =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { refresh++ }
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+            refresh++
+            PresenceBeacon.start(this)
+        }
     private var refresh by mutableIntStateOf(0)
     private var photoCaption = ""
     private val pickPhoto = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -264,6 +267,12 @@ class MainActivity : FragmentActivity() {
             },
             SetupItem("Stay active in the background", "Set battery use to unrestricted", power.isIgnoringBatteryOptimizations(packageName)) {
                 openSettings(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+            },
+            SetupItem(
+                "Presence beacon", "Lets your Bluetooth sensor notice you nearby",
+                PresenceBeacon.canRun(this), required = false,
+            ) {
+                askPermissions.launch(arrayOf(Manifest.permission.BLUETOOTH_ADVERTISE))
             },
             SetupItem("Autostart", "On Xiaomi: turn on Autostart for Mitauri", null, action = ::openAutostart),
             SetupItem("Notifications", "For calls and reminders", notifications) {

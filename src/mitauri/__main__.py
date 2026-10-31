@@ -10,6 +10,7 @@ from .auth import Devices
 from .brain import Brain, BrainError, prune_transcripts
 from .config import load_config, new_token
 from .memory import Memory
+from .presence import Presence, load_key
 from .reminders import Reminders
 from .speech import Speech
 
@@ -80,7 +81,9 @@ def main() -> None:
     new_token(config.data_dir)
     session = (config.data_dir / "session.txt")
     prune_transcripts(config.data_dir, {session.read_text()} if session.exists() else set())
-    api = Api(brain, load_token(config.data_dir), config.data_dir, speech, memory)
+    presence = Presence(load_key(config.data_dir))
+    presence.watch_serial(os.environ.get("MITAURI_PRESENCE_PORT", "/dev/ttyUSB0"))
+    api = Api(brain, load_token(config.data_dir), config.data_dir, speech, memory, presence)
     bot = MitauriBot(int(user_id), Brain(config, memory, limited=True), reminders, config, api, brain)
     try:
         asyncio.run(serve(bot, token, api, brain))

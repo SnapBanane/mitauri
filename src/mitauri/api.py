@@ -13,6 +13,7 @@ from aiohttp import WSMsgType, web
 from .audit import record
 from .auth import Devices, FailureLimiter
 from .brain import BrainError
+from .presence import load_key
 from .config import API_PORT, LOCATION_TIMEOUT_SECONDS, load_token  # noqa: F401
 
 PORT = API_PORT
@@ -28,7 +29,7 @@ MAX_MESSAGE_CHARS = 20_000
 MAX_SPEECH_CHARS = 2_000
 LOOPBACK = ("127.0.0.1", "::1")
 DEVICE = web.RequestKey("device", str)
-INTERNAL_PATHS = ("/location", "/door", "/notifications", "/reply", "/place-reminders")
+INTERNAL_PATHS = ("/location", "/door", "/notifications", "/reply", "/place-reminders", "/presence")
 MAX_REPLY_CHARS = 1_000
 JPEG_START = b"\xff\xd8\xff"
 
@@ -89,7 +90,8 @@ class SentenceSplitter:
 
 
 class Api:
-    def __init__(self, brain, internal_token: str, data_dir, speech=None, memory=None):
+    def __init__(self, brain, internal_token: str, data_dir, speech=None, memory=None, presence=None):
+        self._presence = presence
         self._brain = brain
         self._internal_token = internal_token
         self._data_dir = data_dir
@@ -112,6 +114,8 @@ class Api:
         app.router.add_get("/notifications", self._on_read_notifications)
         app.router.add_post("/reply", self._on_ask_to_reply)
         app.router.add_post("/place-reminders", self._on_place_reminder)
+        app.router.add_get("/presence", self._on_presence)
+        app.router.add_get("/presence-key", self._on_presence_key)
         app.router.add_post("/photo", self._on_photo)
         app.router.add_post("/voice", self._on_voice)
         app.router.add_post("/speak", self._on_speak)
@@ -218,8 +222,9 @@ class Api:
         if is_door_command(text):
             # Goes straight to the phone. Claude isn't involved, so nothing it reads can trigger this.
             record(self._data_dir, "door_command", via="text")
-            await socket.send_json({"type": "door_command"})
-            await socket.send_json({"type": "reply", "id": message_id, "text": "Tür wird geöffnet."})
+            if not socket.closed:
+                await socket.send_json({"type": "door_command"})
+                await socket.send_json({"type": "reply", "id": message_id, "text": "Tür wird geöffnet."})
             return
         try:
             reply = await self._brain.ask(text)
@@ -319,6 +324,15 @@ class Api:
         answer.pop("type", None)
         record(self._data_dir, "phone_request", kind=kind, ok="error" not in answer)
         return web.json_response(answer)
+
+    async def _on_presence(self, _: web.Request) -> web.Response:
+        if self._presence is None:
+            return web.json_response({"state": "unknown", "reason": "No presence sensor is set up."})
+        return web.json_response(self._presence.status())
+
+    async def _on_presence_key(self, request: web.Request) -> web.Response:
+        record(self._data_dir, "presence_key_sent", device=request[DEVICE])
+        return web.json_response({"key": load_key(self._data_dir).hex()})
 
     async def _on_place_reminder(self, request: web.Request) -> web.Response:
         try:

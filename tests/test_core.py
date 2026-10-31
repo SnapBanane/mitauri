@@ -16,7 +16,8 @@ from mitauri.bot import MAX_MESSAGE_LENGTH, MitauriBot, briefing_due, is_from_ow
 from mitauri.reminders import CALL, TRIP, Reminders
 from mitauri.tools import route_url
 from mitauri.brain import Brain, BrainError, prune_transcripts, transcript_dir
-from mitauri import proposals, research, tools, transit, weather
+from mitauri import geo, proposals, research, stocks, tools, transit, weather
+from mitauri import presence as presence_module
 from mitauri.transit import best_trip, describe_trip, parse_departures
 from mitauri.config import Config, load_token, lock_down, move_secrets, new_token
 from mitauri.memory import Memory
@@ -654,7 +655,7 @@ def test_rain_tip_only_when_rain_is_likely_soon():
 
 def test_place_reminder_tool_clamps_radius_and_reports_the_place(monkeypatch):
     sent = {}
-    monkeypatch.setattr(tools.transit, "find_place", lambda name: {"coord": [48.1, 11.5], "name": "Rewe, München"})
+    monkeypatch.setattr(tools.geo, "search", lambda name, near=None, limit=5: [{"latitude": 48.1, "longitude": 11.5, "name": "Rewe, München"}])
     monkeypatch.setattr(tools, "_ask_server", lambda path, body=None: sent.update(body) or {"result": "Set."})
     assert "Rewe, München" in tools.remind_at_place("Milch", "Rewe München", radius_metres=5)
     assert sent["radius"] == 100
@@ -663,6 +664,96 @@ def test_place_reminder_tool_clamps_radius_and_reports_the_place(monkeypatch):
 
 def test_place_tools_are_not_on_discord():
     assert not tools.LIMITED_TOOLS & {"remind_at_place", "list_place_reminders", "cancel_place_reminder"}
+
+
+def test_places_sort_by_distance_and_only_a_rough_position_is_sent(monkeypatch):
+    urls = []
+
+    def fake(url):
+        urls.append(url)
+        return [
+            {"lat": "48.2", "lon": "11.5", "display_name": "Far", "type": "shop"},
+            {"lat": "48.151", "lon": "11.512", "display_name": "Close", "type": "shop"},
+        ]
+
+    monkeypatch.setattr(geo, "_get", fake)
+    monkeypatch.setattr(geo, "MIN_SECONDS_BETWEEN_SEARCHES", 0)
+    places = geo.search("rewe unique query", near=(48.15123456, 11.51234567))
+    assert [p["name"] for p in places] == ["Close", "Far"]
+    assert places[0]["distance_km"] < 1
+    assert "48.15123" not in urls[0] and "11.51234" not in urls[0]
+    geo.search("rewe unique query", near=(48.15123456, 11.51234567))
+    assert len(urls) == 1  # a repeat is answered from the cache
+
+
+def test_route_sends_a_rough_start_and_handles_no_route(monkeypatch):
+    urls = []
+
+    def fake(url):
+        urls.append(url)
+        return {"routes": [{"distance": 12400, "duration": 900}]}
+
+    monkeypatch.setattr(geo, "_get", fake)
+    assert geo.route((48.15123456, 11.51234567), (48.2, 11.6), "walking") == {"km": 12.4, "minutes": 15}
+    assert "routed-foot" in urls[0] and "48.15123" not in urls[0]
+    monkeypatch.setattr(geo, "_get", lambda url: {"routes": []})
+    assert geo.route((48.1, 11.5), (48.2, 11.6)) is None
+
+
+KEY = bytes(range(32))
+NOW = 5_972_000 * 300 + 10
+
+
+def sighting(rssi, token=None):
+    return json.dumps({"t": token or presence_module.token_for(KEY, NOW // 300), "r": rssi})
+
+
+def test_presence_token_matches_the_phone():
+    assert presence_module.token_for(KEY, 5_972_000) == "bdea298293568dda"
+
+
+def test_presence_only_accepts_our_rotating_token():
+    sensor = presence_module.Presence(KEY)
+    sensor.handle_line('{"hb":1}', NOW)
+    sensor.handle_line(sighting(-50, "00" * 8), NOW)
+    assert sensor.status(NOW)["state"] == "away"
+    old = presence_module.token_for(KEY, NOW // 300 - 10)
+    sensor.handle_line(sighting(-50, old), NOW)
+    assert sensor.status(NOW)["state"] == "away"
+    sensor.handle_line(sighting(-50), NOW)
+    assert sensor.status(NOW)["state"] == "near"
+
+
+def test_presence_states_and_garbage_from_the_sensor():
+    sensor = presence_module.Presence(KEY)
+    assert sensor.status(NOW)["state"] == "unknown"
+    for garbage in ("", "not json", "[1,2]", '{"t":1}', '{"r":"x","t":"y"}', sighting(5)):
+        sensor.handle_line(garbage, NOW)
+    sensor.handle_line(sighting(-85), NOW)
+    assert sensor.status(NOW)["state"] == "nearby"
+    later = NOW + presence_module.AWAY_AFTER_SECONDS + 1
+    sensor.handle_line('{"hb":1}', later)
+    assert sensor.status(later)["state"] == "away"
+    assert sensor.status(later + 60)["state"] == "unknown"
+
+
+def test_presence_tool_is_not_on_discord():
+    assert not tools.LIMITED_TOOLS & {"presence", "find_places", "travel_time"}
+
+
+def test_stock_quotes_parse_prices_and_missing_symbols():
+    text = "Symbol,Date,Time,Name,Open,Close,Volume\nSAP.DE,2026-10-30,17:35:00,SAP,100,102,5\nNOPE.US,N/D,N/D,N/D,N/D,N/D,N/D\n"
+    found = stocks.parse_quotes(text)
+    assert found[0]["price"] == 102 and found[0]["change_today_percent"] == 2
+    assert "error" in found[1]
+
+
+def test_proposal_copy_skips_firmware_build_output(tmp_path):
+    project = tmp_path / "p"
+    (project / "firmware" / ".pio" / "x").mkdir(parents=True)
+    (project / "firmware" / ".pio" / "x" / "big").write_text("x")
+    (project / "firmware" / "main.cpp").write_text("y")
+    assert [str(f) for f in proposals.project_files(project)] == ["firmware/main.cpp"]
 
 
 def test_split_message():

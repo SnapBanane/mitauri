@@ -15,7 +15,7 @@ from pathlib import Path
 from .config import data_dir
 
 PROJECT = Path(__file__).resolve().parents[2]
-SKIPPED = {".venv", ".gradle", "build", "__pycache__", ".pytest_cache", ".git", ".idea", ".env", "local.properties"}
+SKIPPED = {".venv", ".gradle", ".pio", "build", "__pycache__", ".pytest_cache", ".git", ".idea", ".env", "local.properties"}
 SKIPPED_SUFFIXES = (".keystore", ".jks", ".apk", ".png", ".jar", ".env")
 MAX_REQUEST_CHARS = 2_000
 MAX_PER_DAY = 5

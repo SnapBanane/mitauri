@@ -121,11 +121,10 @@ object Mitauri {
 
     /** Forgets this server, here and on the server, and throws away this phone's key. */
     fun unpair() {
-        val request = signedRequest("device", "DELETE", ByteArray(0)).build()
         Thread {
             try {
-                client.newCall(request).execute().close()
-            } catch (_: IOException) {
+                client.newCall(signedRequest("device", "DELETE", ByteArray(0)).build()).execute().close()
+            } catch (_: Exception) {
                 // Offline, so it can also be removed with `mitauri unpair` on the server.
             }
             DeviceKey.delete()
@@ -181,7 +180,7 @@ object Mitauri {
         Thread {
             try {
                 resetConversation()
-            } catch (_: IOException) {
+            } catch (_: Exception) {
                 // Offline: the server's conversation carries on, but this phone's copy is gone.
             }
         }.start()
@@ -309,13 +308,19 @@ object Mitauri {
                 if (webSocket === socket) {
                     status = Status.CONNECTED
                     retryDelay = MIN_RETRY_MILLIS
+                    if (!PresenceBeacon.hasKey(app)) fetchPresenceKey()
                 }
             }
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
-            val data = JSONObject(text)
-            when (data.getString("type")) {
+            // Nothing the server sends should be able to crash the app.
+            val data = try {
+                JSONObject(text)
+            } catch (_: org.json.JSONException) {
+                return
+            }
+            when (data.optString("type")) {
                 "reply" -> main.post { onReply(data.getString("text")) }
                 "door_command" -> main.post { DoorOpener.command(app) }
                 "open_door", "read_notifications", "ask_to_reply", "add_place_reminder", "list_place_reminders", "remove_place_reminder" -> main.post { answerRequest(webSocket, data) }
@@ -348,6 +353,24 @@ object Mitauri {
                 }
             }
         }
+    }
+
+    private fun fetchPresenceKey() {
+        val request = signedRequest("presence-key", "GET", ByteArray(0)).build()
+        Thread {
+            try {
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val key = JSONObject(response.body!!.string()).getString("key")
+                        main.post { PresenceBeacon.saveKey(app, key) }
+                    }
+                }
+            } catch (_: IOException) {
+                // Tried again the next time it connects.
+            } catch (_: org.json.JSONException) {
+                // Likewise, if the answer was unreadable.
+            }
+        }.start()
     }
 
     private fun answerRequest(webSocket: WebSocket, data: JSONObject) {

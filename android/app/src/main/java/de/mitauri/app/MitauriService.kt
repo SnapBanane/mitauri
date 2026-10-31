@@ -26,6 +26,7 @@ class MitauriService : Service() {
         super.onCreate()
         Mitauri.init(this)
         PlaceReminders.watchAll(this)
+        PresenceBeacon.start(this)
         val channel = NotificationChannel(CHANNEL, "Background connection", NotificationManager.IMPORTANCE_MIN)
         channel.setShowBadge(false)
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
@@ -54,6 +55,7 @@ class MitauriService : Service() {
     override fun onDestroy() {
         getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(network)
         Mitauri.disconnect()
+        PresenceBeacon.stop(this)
         super.onDestroy()
     }
 

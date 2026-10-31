@@ -19,3 +19,5 @@ pair_code.json
 audit*.log
 claude-errors*.log
 phone-chat-backup.json
+.pio/
+presence_key
