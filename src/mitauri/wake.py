@@ -5,6 +5,7 @@ import functools
 import http.server
 import io
 import json
+import logging
 import secrets
 import socket
 import threading
@@ -14,6 +15,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
+
+log = logging.getLogger(__name__)
 
 SETTINGS_FILE = "wake.json"
 FIRED_FILE = "wake_fired.txt"
@@ -36,6 +39,9 @@ NOTE_ATTACK_SECONDS = 0.012
 NOTE_DECAY = 2.6
 CHIME_LOUDNESS = 0.45
 CAST_TIMEOUT_SECONDS = 15
+FIND_ATTEMPTS = 4
+FIND_RETRY_SECONDS = 5
+SPEAKER_FILE = "wake_speaker.txt"
 AUDIO_PORT = 8767  # fixed, so a firewall can allow just this
 
 
@@ -187,20 +193,35 @@ class _CastPlayer:
         return self._cast.is_idle or (status.player_state == "IDLE" and status.idle_reason in ("CANCELLED", "INTERRUPTED"))
 
 
+def find_speaker(device: str, data_dir: Path, attempts: int = FIND_ATTEMPTS):
+    """Network discovery misses sometimes, so it tries several times, and goes straight to the address that
+    worked last time. Returns the speaker and a browser to stop. Raises OSError if it never turns up."""
+    import pychromecast
+
+    known_file = data_dir / SPEAKER_FILE
+    for attempt in range(attempts):
+        if attempt:
+            time.sleep(FIND_RETRY_SECONDS)
+        known = [known_file.read_text()] if known_file.exists() else None
+        casts, browser = pychromecast.get_listed_chromecasts(
+            friendly_names=[device], timeout=CAST_TIMEOUT_SECONDS, known_hosts=known,
+        )
+        if casts:
+            known_file.write_text(casts[0].cast_info.host)
+            return casts[0], browser
+        browser.stop_discovery()
+        log.warning("Speaker %s not found on attempt %s", device, attempt + 1)
+    raise OSError(f"Speaker {device} wasn't found.")
+
+
 def play(device: str, audio: bytes, seconds: float, volume: float, data_dir: Path, repeats: int | None = None) -> bool:
     """Serves the audio at a secret address only while it plays, and fully lets go of the speaker afterwards.
     Returns whether it was stopped. Raises if the speaker can't be reached."""
-    import pychromecast
-
     stop_file, ringing = data_dir / STOP_FILE, data_dir / RINGING_FILE
     stop_file.unlink(missing_ok=True)
-    casts, browser = pychromecast.get_listed_chromecasts(friendly_names=[device], timeout=CAST_TIMEOUT_SECONDS)
+    cast, browser = find_speaker(device, data_dir)
     server = None
-    cast = None
     try:
-        if not casts:
-            raise OSError(f"Speaker {device} wasn't found.")
-        cast = casts[0]
         cast.wait(timeout=CAST_TIMEOUT_SECONDS)
         address = _own_address(cast.cast_info.host)
         path = "/" + secrets.token_urlsafe(24) + ".wav"
@@ -215,12 +236,11 @@ def play(device: str, audio: bytes, seconds: float, volume: float, data_dir: Pat
     finally:
         ringing.unlink(missing_ok=True)
         stop_file.unlink(missing_ok=True)
-        if cast is not None:
-            try:
-                cast.media_controller.stop()
-                cast.quit_app()
-            except Exception:  # letting go is best effort, and the speaker may be gone
-                pass
+        try:
+            cast.media_controller.stop()
+            cast.quit_app()
+        except Exception:  # letting go is best effort, and the speaker may be gone
+            pass
         if server:
             server.shutdown()
             server.server_close()

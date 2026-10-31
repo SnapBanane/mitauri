@@ -5,6 +5,7 @@ import io
 import json
 import os
 import stat
+import sys
 import time as clock
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -947,6 +948,28 @@ def test_alarm_stops_on_request_on_the_speaker_or_at_its_limit(monkeypatch):
     player = FakePlayer()
     assert wake.sound_until_stopped(player, -1, lambda: False, far, repeats=2) is False and player.starts == 2
     assert wake.sound_until_stopped(FakePlayer(), -1, lambda: False, clock.monotonic() - 1) is False
+
+
+def test_finding_the_speaker_retries_and_remembers_its_address(tmp_path, monkeypatch):
+    monkeypatch.setattr(wake, "FIND_RETRY_SECONDS", 0)
+    speaker = SimpleNamespace(cast_info=SimpleNamespace(host="192.168.1.9"))
+    browser = SimpleNamespace(stop_discovery=lambda: None)
+    answers = [[], [], [speaker]]
+    known_hosts = []
+
+    def fake(friendly_names, timeout, known_hosts=None, seen=known_hosts):
+        seen.append(known_hosts)
+        return answers.pop(0), browser
+
+    monkeypatch.setitem(sys.modules, "pychromecast", SimpleNamespace(get_listed_chromecasts=fake))
+    assert wake.find_speaker("Schlafzimmer", tmp_path)[0] is speaker
+    assert known_hosts == [None, None, None]
+    answers.append([speaker])
+    wake.find_speaker("Schlafzimmer", tmp_path)
+    assert known_hosts[-1] == ["192.168.1.9"]
+    answers.extend([[], []])
+    with pytest.raises(OSError, match="wasn't found"):
+        wake.find_speaker("Schlafzimmer", tmp_path, attempts=2)
 
 
 def test_split_message():

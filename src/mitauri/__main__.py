@@ -66,6 +66,8 @@ def main() -> None:
             wake.play(settings["device"], audio, wake.wav_seconds(audio), settings["volume"], config.data_dir, repeats=1)
         except KeyboardInterrupt:
             pass
+        except OSError as error:
+            raise SystemExit(f"{error} Is it on the same Wi-Fi? In a real alarm, your phone would ring instead.")
         finally:
             alarm_notice(config.data_dir, over=True)
         print("Done.")
