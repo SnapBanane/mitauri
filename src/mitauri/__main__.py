@@ -24,6 +24,7 @@ def main() -> None:
     commands.add_parser("devices", help="list paired devices")
     commands.add_parser("unpair", help="remove a paired device").add_argument("device")
     commands.add_parser("wake-test", help="play a test alarm on the speaker, once")
+    commands.add_parser("wake-stop", help="stop an alarm that's playing")
     proposal = commands.add_parser("proposal", help="review changes Mitauri has suggested to itself")
     proposal.add_argument("action", choices=["list", "show", "apply", "discard"])
     proposal.add_argument("id", nargs="?")
@@ -55,9 +56,18 @@ def main() -> None:
     if args.command == "wake-test":
         # Only here, in a terminal: it's loud, and it may be in a bedroom.
         settings = wake.load_settings(config.data_dir)
-        audio = Speech(config.data_dir).synthesize("Das ist ein Test von Mitauri. Guten Morgen!", "de")
-        wake.play(settings["device"], audio, wake.wav_seconds(audio), settings["volume"], repeats=1)
-        print("Played on", settings["device"])
+        audio = wake.with_tone(Speech(config.data_dir).synthesize("Das ist ein Test von Mitauri. Guten Morgen!", "de"))
+        print("Playing once on", settings["device"], "- press Ctrl+C or run mitauri wake-stop to stop it")
+        try:
+            wake.play(settings["device"], audio, wake.wav_seconds(audio), settings["volume"], config.data_dir, repeats=1)
+        except KeyboardInterrupt:
+            pass
+        print("Done.")
+        return
+
+    if args.command == "wake-stop":
+        wake.request_stop(config.data_dir)
+        print("Stop requested.")
         return
 
     if args.command == "proposal":

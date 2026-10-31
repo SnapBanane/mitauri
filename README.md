@@ -122,8 +122,10 @@ Add your WebUntis login to `secrets.env`, as `MITAURI_WEBUNTIS_SERVER`, `_SCHOOL
 failures could lock your school account.
 
 "Weck mich 90 Minuten vor der ersten Stunde" turns on the wake-up. It skips cancelled lessons, and rechecks every
-30 minutes. Google has no public alarm API for Nest, so it plays spoken audio on the speaker over Wi-Fi, then
-rings the phone 3 minutes later, or straight away if the speaker fails. It's off by default, and only works
+30 minutes. Google has no public alarm API for Nest, so it plays an alarm tone and spoken audio on the speaker over
+Wi-Fi, repeating for up to 5 minutes. To stop it, use Stop on the phone's notification, say or type "Stopp", say
+"Hey Google, stopp", or run `mitauri wake-stop`. The phone rings 3 minutes in, or straight away if the speaker
+fails, and answering or declining also stops it. It's off by default, and only works
 while the server is running on the same Wi-Fi as the speaker, so keep a phone alarm for anything important.
 The speaker fetches the audio from this machine on port 8767, which is open only while the alarm plays and
 serves one secret address. If you use a firewall, allow that port from your own network, such as

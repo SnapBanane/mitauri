@@ -324,12 +324,16 @@ object Mitauri {
                 "reply" -> main.post { onReply(data.getString("text")) }
                 "door_command" -> main.post { DoorOpener.command(app) }
                 "open_door", "read_notifications", "ask_to_reply", "add_place_reminder", "list_place_reminders", "remove_place_reminder" -> main.post { answerRequest(webSocket, data) }
-                "ring", "notify" -> {
+                "ring", "notify", "alarm", "alarm_over" -> {
                     // Tells the server it arrived, so it can fall back to Discord if it didn't.
                     webSocket.send(JSONObject().put("type", "ack").put("id", data.getString("id")).toString())
                     main.post {
-                        if (data.getString("type") == "ring") Calls.ring(app, data.getString("text"))
-                        else Calls.notify(app, "Reminder", data.getString("text"))
+                        when (data.getString("type")) {
+                            "ring" -> Calls.ring(app, data.getString("text"))
+                            "alarm" -> Calls.alarmStarted(app, data.getString("text"))
+                            "alarm_over" -> Calls.alarmOver(app)
+                            else -> Calls.notify(app, "Reminder", data.getString("text"))
+                        }
                     }
                 }
                 "get_location" -> main.post { sendLocation(webSocket, data.getString("id")) }
@@ -371,6 +375,10 @@ object Mitauri {
                 // Likewise, if the answer was unreadable.
             }
         }.start()
+    }
+
+    fun stopAlarm() {
+        socket?.send(JSONObject().put("type", "stop_alarm").toString())
     }
 
     private fun answerRequest(webSocket: WebSocket, data: JSONObject) {

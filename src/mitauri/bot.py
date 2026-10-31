@@ -152,17 +152,30 @@ class MitauriBot(discord.Client):
 
     async def _sound_school_wake(self, plan: dict, settings: dict) -> None:
         text = wake.alarm_text(plan["lesson"])
-        ring_soon = settings["phone_backup"]
+        if self._phone:
+            await self._phone.deliver("alarm", text)
+        sound = asyncio.create_task(self._play_alarm(text, settings))
         try:
-            audio = await asyncio.to_thread(self._speech.synthesize, text, "de")
-            await asyncio.to_thread(wake.play, settings["device"], audio, wake.wav_seconds(audio), settings["volume"])
+            await asyncio.wait_for(asyncio.shield(sound), PHONE_BACKUP_DELAY_SECONDS if settings["phone_backup"] else None)
+        except TimeoutError:
+            # Still ringing after a few minutes, so the phone joins in. Answering or declining stops both.
+            if self._phone:
+                await self._phone.deliver("ring", text)
+        stopped = await sound
+        if stopped is None and self._phone:  # the speaker failed, so the phone has to do it alone
+            await self._phone.deliver("ring", text)
+        if self._phone:
+            await self._phone.deliver("alarm_over", "")
+
+    async def _play_alarm(self, text: str, settings: dict) -> bool | None:
+        try:
+            audio = wake.with_tone(await asyncio.to_thread(self._speech.synthesize, text, "de"))
+            return await asyncio.to_thread(
+                wake.play, settings["device"], audio, wake.wav_seconds(audio), settings["volume"], self._data_dir,
+            )
         except Exception:  # whatever went wrong with the speaker, the phone still has to ring
             log.exception("The speaker alarm failed")
-            ring_soon = True
-        else:
-            await asyncio.sleep(PHONE_BACKUP_DELAY_SECONDS)
-        if ring_soon and self._phone:
-            await self._phone.deliver("ring", text)
+            return None
 
     async def _report_research(self) -> None:
         for job in research.unreported(self._data_dir):

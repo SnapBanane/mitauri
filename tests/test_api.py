@@ -376,6 +376,23 @@ def test_presence_status_is_internal_and_key_needs_a_paired_device(tmp_path):
     assert key not in (tmp_path / "audit.log").read_text()
 
 
+def test_stop_only_means_the_alarm_while_it_is_ringing(tmp_path):
+    async def test(session):
+        async with connect(session) as socket:
+            await socket.send_json({"type": "message", "id": "1", "text": "Stopp"})
+            assert (await socket.receive_json())["text"] == "echo Stopp"
+            assert not (tmp_path / "wake_stop").exists()
+            (tmp_path / "wake_ringing").touch()
+            await socket.send_json({"type": "message", "id": "2", "text": "Stopp!"})
+            assert "Wecker aus" in (await socket.receive_json())["text"]
+            assert (tmp_path / "wake_stop").exists()
+            (tmp_path / "wake_stop").unlink()
+            await socket.send_json({"type": "stop_alarm"})
+            await asyncio.sleep(0.05)
+            assert (tmp_path / "wake_stop").exists()
+    with_api(test, tmp_path)
+
+
 def test_voice_returns_transcript_and_reply(tmp_path):
     async def test(session):
         response = await session.post(f"{BASE}/voice", data=b"audio", headers=signed("POST", "/voice", b"audio"))

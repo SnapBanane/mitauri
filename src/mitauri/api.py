@@ -10,6 +10,7 @@ import uuid
 
 from aiohttp import WSMsgType, web
 
+from . import wake
 from .audit import record
 from .auth import Devices, FailureLimiter
 from .brain import BrainError
@@ -21,6 +22,7 @@ LINK = re.compile(r"https?://\S+")
 SENTENCE = re.compile(r"(.+?(?:[.!?…]+(?=\s)|\n))", re.DOTALL)
 MAX_RECORDING_BYTES = 4 * 1024 * 1024  # two minutes of 16 kHz mono audio, or a large photo
 DELIVERY_TIMEOUT_SECONDS = 15
+STOP_COMMANDS = {"stop", "stopp", "halt", "aus", "ruhe", "alarm aus", "wecker aus", "stop alarm", "stopp den wecker", "ich bin wach"}
 DOOR_COMMANDS = {
     "öffne die tür", "öffne tür", "tür öffnen", "die tür öffnen", "tür auf", "mach die tür auf", "mach tür auf",
     "open the door", "open door",
@@ -63,6 +65,10 @@ def is_door_command(text: str) -> bool:
     words = re.sub(r"[^\wäöüß ]", "", text.lower()).split()
     words = [w for w in words if w not in ("mitauri", "bitte", "hey", "please")]
     return " ".join(words) in DOOR_COMMANDS
+
+
+def is_stop_command(text: str) -> bool:
+    return re.sub(r"[^\wäöüß ]", "", text.lower()).strip() in STOP_COMMANDS
 
 
 def speakable(text: str) -> str:
@@ -209,10 +215,17 @@ class Api:
         if data["type"] == "message":
             if len(data["text"]) > MAX_MESSAGE_CHARS:
                 raise ValueError("message too long")
+            if wake.is_ringing(self._data_dir) and is_stop_command(data["text"]):
+                wake.request_stop(self._data_dir)
+                data = {**data, "text": ""}
+                asyncio.create_task(socket.send_json({"type": "reply", "id": data["id"], "text": "Wecker aus. Guten Morgen!"}))
+                return
             # A separate task, because answering may need this socket to fetch the location.
             task = asyncio.create_task(self._answer(socket, data["id"], data["text"]))
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
+        elif data["type"] == "stop_alarm":
+            wake.request_stop(self._data_dir)
         elif data["type"] in ("location", "ack", "answer"):
             future = self._pending.get(data["id"])
             if future and not future.done():
@@ -275,7 +288,10 @@ class Api:
         phone = _PhoneStream(response)
         await phone.send({"transcript": transcript, "language": language})
         reply = ""
-        if is_door_command(transcript):
+        if wake.is_ringing(self._data_dir) and is_stop_command(transcript):
+            wake.request_stop(self._data_dir)
+            reply = "Wecker aus."
+        elif is_door_command(transcript):
             record(self._data_dir, "door_command", via="voice")
             await phone.send({"door": True})
         elif transcript:

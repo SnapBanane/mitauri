@@ -3,13 +3,17 @@ plays spoken audio on it over the local network. It depends on this machine bein
 
 import functools
 import http.server
+import io
 import json
 import secrets
 import socket
 import threading
 import time
+import wave
 from datetime import date, datetime, timedelta
 from pathlib import Path
+
+import numpy as np
 
 SETTINGS_FILE = "wake.json"
 FIRED_FILE = "wake_fired.txt"
@@ -17,8 +21,17 @@ DEFAULTS = {"enabled": False, "minutes_before": 90, "device": "Schlafzimmer", "v
 FIRE_WINDOW_MINUTES = 15
 MIN_MINUTES_BEFORE = 15
 MAX_MINUTES_BEFORE = 240
-REPEATS = 3
-GAP_SECONDS = 20
+GAP_SECONDS = 3
+MAX_ALARM_SECONDS = 300
+POLL_SECONDS = 0.5
+CAST_SETTLE_SECONDS = 1
+STOP_FILE = "wake_stop"
+RINGING_FILE = "wake_ringing"
+LEAD_IN_SECONDS = 2.0
+TONE_PITCHES = (660.0, 880.0, 1100.0)
+TONE_SECONDS = 0.22
+TONE_ROUNDS = 3
+TONE_LOUDNESS = 0.6
 CAST_TIMEOUT_SECONDS = 15
 AUDIO_PORT = 8767  # fixed, so a firewall can allow just this
 
@@ -87,30 +100,115 @@ class _OneFile(http.server.BaseHTTPRequestHandler):
         pass
 
 
-def play(device: str, audio: bytes, seconds: float, volume: float, repeats: int = REPEATS) -> None:
-    """Serves the audio at a secret address only while it plays. Raises if the speaker can't be reached."""
+def request_stop(data_dir: Path) -> None:
+    (data_dir / STOP_FILE).touch()
+
+
+def is_ringing(data_dir: Path) -> bool:
+    path = data_dir / RINGING_FILE
+    return path.exists() and time.time() - path.stat().st_mtime < MAX_ALARM_SECONDS + 30
+
+
+def with_tone(speech: bytes) -> bytes:
+    """Silence for the speaker to wake up, then an alarm tone, then the words. Same format as the voice."""
+    with wave.open(io.BytesIO(speech)) as file:
+        rate, width, channels = file.getframerate(), file.getsampwidth(), file.getnchannels()
+        words = file.readframes(file.getnframes())
+    parts = [_silence(LEAD_IN_SECONDS, rate, channels)]
+    for _ in range(TONE_ROUNDS):
+        for pitch in TONE_PITCHES:
+            parts += [_beep(pitch, rate, channels), _silence(0.08, rate, channels)]
+        parts.append(_silence(0.35, rate, channels))
+    parts += [_silence(0.4, rate, channels), np.frombuffer(words, dtype=np.int16).tobytes()]
+    output = io.BytesIO()
+    with wave.open(output, "wb") as file:
+        file.setnchannels(channels)
+        file.setsampwidth(width)
+        file.setframerate(rate)
+        file.writeframes(b"".join(parts))
+    return output.getvalue()
+
+
+def _silence(seconds: float, rate: int, channels: int) -> bytes:
+    return bytes(2 * channels * int(seconds * rate))
+
+
+def _beep(pitch: float, rate: int, channels: int) -> bytes:
+    times = np.arange(int(TONE_SECONDS * rate)) / rate
+    fade = np.minimum(1, np.minimum(times, TONE_SECONDS - times) / 0.015)  # no clicks at the edges
+    samples = (np.sin(2 * np.pi * pitch * times) * fade * TONE_LOUDNESS * 32767).astype(np.int16)
+    return np.repeat(samples, channels).tobytes()
+
+
+def sound_until_stopped(player, seconds: float, should_stop, deadline: float, repeats: int | None = None) -> bool:
+    """Plays over and over. Returns True if something stopped it, like the app or "Hey Google, stopp"."""
+    played = 0
+    while time.monotonic() < deadline and (repeats is None or played < repeats):
+        played += 1
+        player.start()
+        ends = time.monotonic() + seconds + 1
+        while time.monotonic() < ends:
+            if should_stop() or player.stopped_by_user():
+                return True
+            time.sleep(POLL_SECONDS)
+        if repeats is None:
+            pause = time.monotonic() + GAP_SECONDS
+            while time.monotonic() < pause:
+                if should_stop():
+                    return True
+                time.sleep(POLL_SECONDS)
+    return False
+
+
+class _CastPlayer:
+    def __init__(self, cast, url: str):
+        self._cast, self._url = cast, url
+
+    def start(self) -> None:
+        controller = self._cast.media_controller
+        controller.play_media(self._url, "audio/wav")
+        controller.block_until_active(CAST_TIMEOUT_SECONDS)
+        time.sleep(CAST_SETTLE_SECONDS)
+
+    def stopped_by_user(self) -> bool:
+        status = self._cast.media_controller.status
+        return self._cast.is_idle or (status.player_state == "IDLE" and status.idle_reason in ("CANCELLED", "INTERRUPTED"))
+
+
+def play(device: str, audio: bytes, seconds: float, volume: float, data_dir: Path, repeats: int | None = None) -> bool:
+    """Serves the audio at a secret address only while it plays, and fully lets go of the speaker afterwards.
+    Returns whether it was stopped. Raises if the speaker can't be reached."""
     import pychromecast
 
+    stop_file, ringing = data_dir / STOP_FILE, data_dir / RINGING_FILE
+    stop_file.unlink(missing_ok=True)
     casts, browser = pychromecast.get_listed_chromecasts(friendly_names=[device], timeout=CAST_TIMEOUT_SECONDS)
     server = None
+    cast = None
     try:
         if not casts:
             raise OSError(f"Speaker {device} wasn't found.")
         cast = casts[0]
         cast.wait(timeout=CAST_TIMEOUT_SECONDS)
-        host = cast.cast_info.host
-        address = _own_address(host)
+        address = _own_address(cast.cast_info.host)
         path = "/" + secrets.token_urlsafe(24) + ".wav"
         server = http.server.ThreadingHTTPServer((address, AUDIO_PORT), functools.partial(_OneFile, path, audio))
         threading.Thread(target=server.serve_forever, daemon=True).start()
         cast.set_volume(volume)
-        for attempt in range(repeats):
-            if attempt:
-                time.sleep(GAP_SECONDS)
-            cast.media_controller.play_media(f"http://{address}:{server.server_address[1]}{path}", "audio/wav")
-            cast.media_controller.block_until_active(CAST_TIMEOUT_SECONDS)
-            time.sleep(seconds + 1)
+        ringing.touch()
+        return sound_until_stopped(
+            _CastPlayer(cast, f"http://{address}:{AUDIO_PORT}{path}"), seconds, stop_file.exists,
+            time.monotonic() + MAX_ALARM_SECONDS, repeats,
+        )
     finally:
+        ringing.unlink(missing_ok=True)
+        stop_file.unlink(missing_ok=True)
+        if cast is not None:
+            try:
+                cast.media_controller.stop()
+                cast.quit_app()
+            except Exception:  # letting go is best effort, and the speaker may be gone
+                pass
         if server:
             server.shutdown()
             server.server_close()
@@ -118,7 +216,5 @@ def play(device: str, audio: bytes, seconds: float, volume: float, repeats: int 
 
 
 def wav_seconds(audio: bytes) -> float:
-    import io
-    import wave
     with wave.open(io.BytesIO(audio)) as file:
         return file.getnframes() / file.getframerate()

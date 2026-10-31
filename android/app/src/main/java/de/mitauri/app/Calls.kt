@@ -5,6 +5,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
@@ -80,6 +81,7 @@ object Calls {
     private const val CALL_CHANNEL = "calls"
     private const val REMINDER_CHANNEL = "reminders"
     private const val CALL_NOTIFICATION = 2
+    private const val ALARM_NOTIFICATION = 4
     private const val RING_MILLIS = 45_000L
     private val main = Handler(Looper.getMainLooper())
     private val giveUp = Runnable { app?.let(::missed) }
@@ -121,8 +123,32 @@ object Calls {
         main.postDelayed(giveUp, RING_MILLIS)
     }
 
-    /** Stops the ringing because the call was answered or declined. */
+    /** A wake-up on the speaker: a notification with a Stop button, for as long as it plays. */
+    fun alarmStarted(context: Context, text: String) {
+        val application = context.applicationContext
+        createChannels(application)
+        val stop = PendingIntent.getBroadcast(
+            application, 3, Intent(application, AlarmStopReceiver::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val notification = Notification.Builder(application, REMINDER_CHANNEL)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("Wake-up alarm")
+            .setContentText(text)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .setOngoing(true)
+            .addAction(Notification.Action.Builder(null, "Stop", stop).build())
+            .build()
+        application.getSystemService(NotificationManager::class.java).notify(ALARM_NOTIFICATION, notification)
+    }
+
+    fun alarmOver(context: Context) {
+        context.applicationContext.getSystemService(NotificationManager::class.java).cancel(ALARM_NOTIFICATION)
+    }
+
+    /** Stops the ringing because the call was answered or declined, and any alarm with it. */
     fun end() {
+        Mitauri.stopAlarm()
         main.removeCallbacks(giveUp)
         app?.getSystemService(NotificationManager::class.java)?.cancel(CALL_NOTIFICATION)
         onEnded?.invoke()
@@ -178,6 +204,14 @@ object Calls {
         val reminders = NotificationChannel(REMINDER_CHANNEL, "Reminders", NotificationManager.IMPORTANCE_HIGH)
         manager.createNotificationChannel(calls)
         manager.createNotificationChannel(reminders)
+    }
+}
+
+class AlarmStopReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        Mitauri.init(context)
+        Mitauri.stopAlarm()
+        Calls.alarmOver(context)
     }
 }
 

@@ -1,5 +1,6 @@
 import asyncio
 import importlib.util
+import wave as wave_module
 import io
 import json
 import os
@@ -11,6 +12,7 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import pytest
 
 from mitauri.bot import MAX_MESSAGE_LENGTH, MitauriBot, briefing_due, is_from_owner, split_message
@@ -845,6 +847,12 @@ def test_bot_fires_once_and_rings_the_phone_if_the_speaker_fails(tmp_path, monke
     wake.save_settings(tmp_path, enabled=True, minutes_before=90)
     bot._speech = SimpleNamespace(synthesize=lambda text, language: b"")
 
+    def no_speaker(*args):
+        raise OSError("no speaker")
+
+    monkeypatch.setattr(wake, "play", no_speaker)
+    monkeypatch.setattr(wake, "with_tone", lambda audio: audio)
+
     async def go():
         moment = datetime(2026, 11, 2, 8, 21, tzinfo=BERLIN)
         await bot._check_school_wake(datetime(2026, 11, 2, 7, 0, tzinfo=BERLIN))
@@ -856,8 +864,8 @@ def test_bot_fires_once_and_rings_the_phone_if_the_speaker_fails(tmp_path, monke
         assert bot._wake_task is first
 
     asyncio.run(go())
-    assert [kind for kind, _ in phone.sent] == ["ring"]
-    assert "9 Uhr 50" in phone.sent[0][1]
+    assert [kind for kind, _ in phone.sent] == ["alarm", "ring", "alarm_over"]
+    assert "9 Uhr 50" in phone.sent[1][1]
 
 
 def test_failed_login_is_never_retried_until_the_login_changes(tmp_path, monkeypatch):
@@ -890,6 +898,54 @@ def test_day_description_marks_cancelled_and_names_subjects():
     described = untis.describe_day([lesson(20261102, 950), lesson(20261102, 755, "cancelled"), lesson(20261103, 755)], date(2026, 11, 2))
     assert [(d["start"], d["cancelled"]) for d in described] == [("07:55", True), ("09:50", False)]
     assert described[0]["subject"] == ["Mathe"]
+
+
+def piper_like_wav(seconds=1.0, rate=22050):
+    output = io.BytesIO()
+    with wave_module.open(output, "wb") as file:
+        file.setnchannels(1)
+        file.setsampwidth(2)
+        file.setframerate(rate)
+        file.writeframes(b"\x10\x00" * int(seconds * rate))
+    return output.getvalue()
+
+
+def test_alarm_audio_starts_with_silence_then_an_audible_tone_and_keeps_the_words():
+    audio = wake.with_tone(piper_like_wav())
+    with wave_module.open(io.BytesIO(audio)) as file:
+        rate = file.getframerate()
+        samples = np.frombuffer(file.readframes(file.getnframes()), dtype=np.int16)
+    assert (rate, wake.wav_seconds(audio) > 4) == (22050, True)
+    assert not samples[: int(rate * wake.LEAD_IN_SECONDS)].any()
+    assert np.abs(samples[int(rate * wake.LEAD_IN_SECONDS):int(rate * 3)]).max() > 15000
+    assert (samples[-rate:] == 16).all()  # the words come last, untouched
+
+
+class FakePlayer:
+    def __init__(self, user_stops=False):
+        self.starts = 0
+        self.user_stops = user_stops
+
+    def start(self):
+        self.starts += 1
+
+    def stopped_by_user(self):
+        return self.user_stops
+
+
+def test_alarm_stops_on_request_on_the_speaker_or_at_its_limit(monkeypatch):
+    monkeypatch.setattr(wake, "POLL_SECONDS", 0.001)
+    monkeypatch.setattr(wake, "GAP_SECONDS", 0)
+    far = clock.monotonic() + 60
+    player = FakePlayer()
+    assert wake.sound_until_stopped(player, -1, lambda: True, far) is False or player.starts >= 1
+    player = FakePlayer()
+    calls = iter([False, True])
+    assert wake.sound_until_stopped(player, 0, lambda: next(calls, True), far) is True
+    assert wake.sound_until_stopped(FakePlayer(user_stops=True), 0, lambda: False, far) is True
+    player = FakePlayer()
+    assert wake.sound_until_stopped(player, -1, lambda: False, far, repeats=2) is False and player.starts == 2
+    assert wake.sound_until_stopped(FakePlayer(), -1, lambda: False, clock.monotonic() - 1) is False
 
 
 def test_split_message():

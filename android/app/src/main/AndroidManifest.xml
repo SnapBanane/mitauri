@@ -96,6 +96,10 @@
         </service>
 
         <receiver
+            android:name=".AlarmStopReceiver"
+            android:exported="false" />
+
+        <receiver
             android:name=".PlaceReminders$PlaceReceiver"
             android:exported="false" />
 
