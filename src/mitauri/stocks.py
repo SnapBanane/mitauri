@@ -1,34 +1,43 @@
-"""Stock quotes from Stooq, which needs no account. They're delayed, so they're not for trading."""
+"""Stock quotes from Yahoo Finance's public chart data, which needs no account but is unofficial, so it
+could change without warning. Prices can be delayed, so they're not for trading."""
 
-import csv
-import io
-from urllib.parse import urlencode
-from urllib.request import urlopen
+import json
+from datetime import datetime, timezone
+from urllib.error import HTTPError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
-URL = "https://stooq.com/q/l/"
+URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+HEADERS = {"User-Agent": "Mozilla/5.0"}
 TIMEOUT_SECONDS = 15
 MAX_SYMBOLS = 10
 
 
-def parse_quotes(text: str) -> list[dict]:
-    quotes = []
-    for row in csv.DictReader(io.StringIO(text)):
-        close = row.get("Close")
-        if not close or close == "N/D":
-            quotes.append({"symbol": row.get("Symbol"), "error": "No data for this symbol."})
-            continue
-        opened = float(row["Open"])
-        quotes.append({
-            "symbol": row["Symbol"],
-            "name": row.get("Name"),
-            "price": float(close),
-            "change_today_percent": round((float(close) - opened) / opened * 100, 2) if opened else None,
-            "as_of": f"{row.get('Date')} {row.get('Time')}",
-        })
-    return quotes
+def parse_quote(symbol: str, data: dict) -> dict:
+    results = (data.get("chart") or {}).get("result") or []
+    if not results:
+        return {"symbol": symbol, "error": "No data for this symbol."}
+    meta = results[0]["meta"]
+    price, previous = meta["regularMarketPrice"], meta.get("chartPreviousClose")
+    return {
+        "symbol": meta.get("symbol", symbol),
+        "name": meta.get("longName") or meta.get("shortName"),
+        "price": price,
+        "currency": meta.get("currency"),
+        "change_percent": round((price - previous) / previous * 100, 2) if previous else None,
+        "as_of": datetime.fromtimestamp(meta["regularMarketTime"], timezone.utc).isoformat(),
+    }
 
 
 def quotes(symbols: list[str]) -> list[dict]:
-    query = urlencode({"s": ",".join(s.lower() for s in symbols[:MAX_SYMBOLS]), "f": "sd2t2nocv", "h": "", "e": "csv"})
-    with urlopen(f"{URL}?{query}", timeout=TIMEOUT_SECONDS) as response:
-        return parse_quotes(response.read().decode(errors="replace"))
+    found = []
+    for symbol in symbols[:MAX_SYMBOLS]:
+        request = Request(URL.format(symbol=quote(symbol.upper(), safe="")), headers=HEADERS)
+        try:
+            with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+                found.append(parse_quote(symbol, json.load(response)))
+        except HTTPError as error:
+            if error.code != 404:
+                raise
+            found.append({"symbol": symbol, "error": "No data for this symbol."})
+    return found

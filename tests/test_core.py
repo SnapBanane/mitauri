@@ -741,11 +741,12 @@ def test_presence_tool_is_not_on_discord():
     assert not tools.LIMITED_TOOLS & {"presence", "find_places", "travel_time"}
 
 
-def test_stock_quotes_parse_prices_and_missing_symbols():
-    text = "Symbol,Date,Time,Name,Open,Close,Volume\nSAP.DE,2026-10-30,17:35:00,SAP,100,102,5\nNOPE.US,N/D,N/D,N/D,N/D,N/D,N/D\n"
-    found = stocks.parse_quotes(text)
-    assert found[0]["price"] == 102 and found[0]["change_today_percent"] == 2
-    assert "error" in found[1]
+def test_stock_quote_parsing_and_missing_symbols():
+    data = {"chart": {"result": [{"meta": {"symbol": "SAP.DE", "longName": "SAP SE", "regularMarketPrice": 102.0,
+                                           "chartPreviousClose": 100.0, "currency": "EUR", "regularMarketTime": 1793000000}}]}}
+    found = stocks.parse_quote("sap.de", data)
+    assert found["price"] == 102.0 and found["change_percent"] == 2.0 and found["currency"] == "EUR"
+    assert "error" in stocks.parse_quote("nope", {"chart": {"result": None}})
 
 
 def test_proposal_copy_skips_firmware_build_output(tmp_path):

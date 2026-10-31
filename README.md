@@ -117,7 +117,8 @@ ask for light use. They receive your search text and, when you ask for something
 
 ## Stocks
 
-"Wie steht die SAP-Aktie?" gets a delayed price from Stooq, with no account. Only the symbols are sent.
+"Wie steht die SAP-Aktie?" gets a possibly delayed price from Yahoo Finance's public chart data, with no
+account. It's unofficial and could stop working. Only the symbols are sent.
 
 ## Presence sensor
 

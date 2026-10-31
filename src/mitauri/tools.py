@@ -366,13 +366,13 @@ def travel_time(destination: str, origin: str | None = None, mode: Literal["driv
 
 @tool
 def stock_quotes(symbols: list[str]) -> dict:
-    """Delayed stock prices. Symbols end in their market, like aapl.us or sap.de.
+    """Possibly delayed stock prices. US symbols are plain, like AAPL, and others name the market, like SAP.DE.
 
     Only for looking things up. Never give this as a recommendation to buy or sell.
     """
     try:
-        return {"quotes": stocks.quotes(symbols), "note": "Delayed prices."}
-    except (OSError, ValueError, KeyError):
+        return {"quotes": stocks.quotes(symbols), "note": "May be delayed."}
+    except (OSError, ValueError, KeyError, TypeError):
         return {"error": "The stock service couldn't be reached."}
 
 
