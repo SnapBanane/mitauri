@@ -14,6 +14,7 @@ import android.service.notification.StatusBarNotification
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.SecureRandom
+import java.time.LocalTime
 
 /** Opens the door app. Its own fingerprint check still decides whether the door opens. */
 object Door {
@@ -48,6 +49,10 @@ class NotificationWatcher : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         NotificationAccess.rememberApp(this, sbn.packageName)
+        if (sbn.packageName in NotificationAccess.allowedApps(this) && !NotificationFilter.isProtectedApp(sbn.packageName)) {
+            val own = OwnLines.fromNotification(sbn.notification.extras)
+            if (own.isNotEmpty()) Mitauri.sendStyleLines(own)
+        }
     }
 
     companion object {
@@ -128,23 +133,38 @@ object NotificationAccess {
     fun askToReply(context: Context, id: String, text: String): String {
         val key = handles[id] ?: return "That notification is no longer available. Read the notifications again."
         val sbn = find(key) ?: return "That notification is gone."
-        if (sbn.packageName !in allowedApps(context) || NotificationFilter.isProtectedApp(sbn.packageName)) {
-            return "That app isn't allowed."
-        }
-        replyAction(sbn) ?: return "That notification doesn't support replies."
-        if (context.getSystemService(KeyguardManager::class.java).isKeyguardLocked) {
-            return "The phone is locked, so nothing was sent. Ask the user to unlock it first."
-        }
+        cantReply(context, sbn)?.let { return it }
         context.startActivity(
             Intent(context, ReplyActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
                 .putExtra("key", key)
                 .putExtra("app", appLabel(context, sbn.packageName))
-                .putExtra("to", NotificationFilter.clean(sbn.notification.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()))
+                .putExtra("to", recipient(sbn))
                 .putExtra("text", text)
         )
         return "Waiting for the user to check and confirm on the phone. Nothing has been sent yet."
     }
+
+    /** Sends after a moment in which the island shows the exact text, for when the user typed the command. */
+    fun sendDirectly(context: Context, id: String, text: String, answer: (String) -> Unit) {
+        val key = handles[id] ?: return answer("That notification is no longer available. Read the notifications again.")
+        val sbn = find(key) ?: return answer("That notification is gone.")
+        cantReply(context, sbn)?.let { return answer(it) }
+        // Late at night the confirmation screen stays, with its warning.
+        if (LocalTime.now().hour in ReplyActivity.LATE_NIGHT_HOURS) return answer(askToReply(context, id, text))
+        ReplySender.start(context, key, recipient(sbn), text, answer)
+    }
+
+    private fun cantReply(context: Context, sbn: StatusBarNotification): String? = when {
+        sbn.packageName !in allowedApps(context) || NotificationFilter.isProtectedApp(sbn.packageName) -> "That app isn't allowed."
+        replyAction(sbn) == null -> "That notification doesn't support replies."
+        context.getSystemService(KeyguardManager::class.java).isKeyguardLocked ->
+            "The phone is locked, so nothing was sent. Ask the user to unlock it first."
+        else -> null
+    }
+
+    private fun recipient(sbn: StatusBarNotification) =
+        NotificationFilter.clean(sbn.notification.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty())
 
     /** Sends through the notification's own reply button. Only ReplyActivity calls this. */
     fun sendReply(context: Context, key: String, text: String): Boolean {

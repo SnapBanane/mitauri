@@ -78,6 +78,20 @@
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- Shows up when sharing a WhatsApp chat export. Only the lines of the sender you pick leave the phone. -->
+        <activity
+            android:name=".StyleImportActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:label="Learn my writing style">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="application/zip" />
+            </intent-filter>
+        </activity>
+
         <service
             android:name=".IslandService"
             android:exported="true"

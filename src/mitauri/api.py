@@ -11,11 +11,12 @@ import uuid
 
 from aiohttp import WSMsgType, web
 
-from . import modules, wake
+from . import modules, style, wake
 from .audit import record
 from .auth import Devices, FailureLimiter
 from .brain import BrainError
 from .presence import load_key
+from .style import StyleLearner
 from .config import API_PORT, LOCATION_TIMEOUT_SECONDS, load_token  # noqa: F401
 
 PORT = API_PORT
@@ -29,6 +30,10 @@ DOOR_COMMANDS = {
     "open the door", "open door",
 }
 MAX_MESSAGE_CHARS = 20_000
+MAX_STYLE_LINES = 2_000
+SEND_COMMAND = re.compile(
+    r"(?i)\b(antworte|antwort|schreib|schreibe|schick|schicke|sende|send|reply|respond|(?:sag|sage|tell)(?! mir| me))\b"
+)
 MAX_SPEECH_CHARS = 2_000
 LOOPBACK = ("127.0.0.1", "::1")
 DEVICE = web.RequestKey("device", str)
@@ -66,6 +71,11 @@ def is_door_command(text: str) -> bool:
     words = re.sub(r"[^\wäöüß ]", "", text.lower()).split()
     words = [w for w in words if w not in ("mitauri", "bitte", "hey", "please")]
     return " ".join(words) in DOOR_COMMANDS
+
+
+def asks_to_send(text: str) -> bool:
+    """Whether the user's own words tell Mitauri to send something. "Was schreibt Max?" doesn't, and only commands do."""
+    return SEND_COMMAND.search(text) is not None
 
 
 def is_stop_command(text: str) -> bool:
@@ -108,6 +118,8 @@ class Api:
         self._limiter = FailureLimiter()
         self._speech = speech
         self._memory = memory
+        self._style = StyleLearner(data_dir)
+        self._may_send_once = False
         self._phone: web.WebSocketResponse | None = None
         self._pending: dict[str, asyncio.Future] = {}
         self._tasks: set[asyncio.Task] = set()
@@ -122,6 +134,9 @@ class Api:
         app.router.add_post("/door", self._on_open_door)
         app.router.add_get("/notifications", self._on_read_notifications)
         app.router.add_post("/reply", self._on_ask_to_reply)
+        app.router.add_get("/style", self._on_get_style)
+        app.router.add_delete("/style", self._on_clear_style)
+        app.router.add_post("/style-lines", self._on_style_lines)
         app.router.add_post("/place-reminders", self._on_place_reminder)
         app.router.add_post("/alarm-notice", self._on_alarm_notice)
         app.router.add_post("/island", self._on_island)
@@ -268,6 +283,8 @@ class Api:
             wake.request_stop(self._data_dir)
         elif data["type"] == "live_dismissed":
             self._live = None
+        elif data["type"] == "style_lines":
+            self._keep_style_lines(style.FRIENDS, [str(line) for line in data["lines"]][:MAX_STYLE_LINES])
         elif data["type"] in ("location", "ack", "answer"):
             future = self._pending.get(data["id"])
             if future and not future.done():
@@ -281,13 +298,44 @@ class Api:
                 await socket.send_json({"type": "door_command"})
                 await socket.send_json({"type": "reply", "id": message_id, "text": "Tür wird geöffnet."})
             return
+        self._keep_style_lines(style.MITAURI, [text])
+        # Decided here from the typed words, which outside text can't change. It's good for one send, for this message.
+        self._may_send_once = asks_to_send(text)
         try:
             reply = await self._brain.ask(text)
             self._remember(text, reply)
         except BrainError as error:
             reply = f"Something went wrong: {error}"
+        finally:
+            self._may_send_once = False
         if not socket.closed:
             await socket.send_json({"type": "reply", "id": message_id, "text": reply})
+
+    def _keep_style_lines(self, source: str, lines: list[str], learn_now: bool = False) -> None:
+        self._style.add(source, lines)
+        if learn_now or self._style.is_due():
+            task = asyncio.create_task(asyncio.to_thread(self._style.learn))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+
+    async def _on_get_style(self, _: web.Request) -> web.Response:
+        return web.json_response(style.notes(self._data_dir))
+
+    async def _on_clear_style(self, _: web.Request) -> web.Response:
+        self._style.clear()
+        record(self._data_dir, "style_cleared")
+        return web.json_response({"cleared": True})
+
+    async def _on_style_lines(self, request: web.Request) -> web.Response:
+        """Lines from a chat the user chose to share. The phone has already left out everyone else's."""
+        try:
+            data = await request.json()
+            lines = [str(line) for line in data["lines"]]
+        except (ValueError, KeyError, TypeError):
+            raise web.HTTPBadRequest() from None
+        self._keep_style_lines(style.FRIENDS, lines[-MAX_STYLE_LINES:], learn_now=True)
+        record(self._data_dir, "style_imported", lines=len(lines))
+        return web.json_response({"received": len(lines)})
 
     async def _on_photo(self, request: web.Request) -> web.Response:
         """The photo is only passed on to Claude, never saved here."""
@@ -325,6 +373,8 @@ class Api:
 
     async def _on_voice(self, request: web.Request) -> web.StreamResponse:
         """Streams one JSON line per event, so the phone can speak before the reply is complete."""
+        # Speech can't send directly until voices are recognised, so anyone nearby can't send in the user's name.
+        self._may_send_once = False
         transcript, language = await asyncio.to_thread(self._speech.transcribe, await request.read())
         response = web.StreamResponse(headers={"Content-Type": "application/x-ndjson"})
         await response.prepare(request)
@@ -456,7 +506,10 @@ class Api:
             raise web.HTTPBadRequest() from None
         if len(text) > MAX_REPLY_CHARS:
             raise web.HTTPRequestEntityTooLarge(max_size=MAX_REPLY_CHARS, actual_size=len(text))
-        return await self._ask_phone("ask_to_reply", notification=notification, text=text)
+        # Sending straight away needs the user's own typed command. Anything else goes to the confirmation screen.
+        direct, self._may_send_once = self._may_send_once, False
+        record(self._data_dir, "reply_requested", direct=direct)
+        return await self._ask_phone("send_reply" if direct else "ask_to_reply", notification=notification, text=text)
 
     async def _on_location_request(self, _: web.Request) -> web.Response:
         phone = self._phone

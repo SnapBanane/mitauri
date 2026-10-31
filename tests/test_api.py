@@ -34,6 +34,11 @@ def signed(method: str, path: str, body: bytes = b"", key=KEY, age: int = 0, non
 
 class FakeBrain:
     async def ask(self, text: str, image=None) -> str:
+        if "usetool" in text:
+            async with ClientSession() as tool:
+                for _ in range(2):
+                    await tool.post(f"{BASE}/reply", json={"notification": "n1", "text": "ok"}, headers=INTERNAL)
+            return "done"
         if image:
             return f"photo {image[0]}"
         if text == "fail":
@@ -472,6 +477,58 @@ def test_a_dismissed_countdown_stays_away_after_reconnecting(tmp_path):
         async with connect(session) as socket:
             await socket.send_json({"type": "message", "id": "2", "text": "hi"})
             assert (await socket.receive_json())["type"] == "reply"  # no countdown comes back
+    with_api(test, tmp_path)
+
+
+def test_only_a_typed_command_sends_directly_and_only_once(tmp_path):
+    async def answer(socket):
+        event = await socket.receive_json()
+        await socket.send_json({"type": "answer", "id": event["id"], "result": "x"})
+        return event["type"]
+
+    async def test(session):
+        body = {"notification": "n1", "text": "ok"}
+        async with connect(session) as socket:
+            await socket.send_json({"type": "message", "id": "1", "text": "antworte Max: ok usetool"})
+            assert await answer(socket) == "send_reply"
+            assert await answer(socket) == "ask_to_reply"  # the second one needs confirming
+            assert (await socket.receive_json())["type"] == "reply"
+            request = asyncio.create_task(session.post(f"{BASE}/reply", json=body, headers=INTERNAL))
+            assert await answer(socket) == "ask_to_reply"  # the permission ended with the message
+            await request
+            await socket.send_json({"type": "message", "id": "2", "text": "was steht da usetool"})
+            assert await answer(socket) == "ask_to_reply"  # no command, so outside text can't cause a send
+            assert await answer(socket) == "ask_to_reply"
+            assert (await socket.receive_json())["type"] == "reply"
+    with_api(test, tmp_path)
+
+
+def test_send_commands_are_recognised():
+    from mitauri.api import asks_to_send
+    for command in ("Antworte Max: bin da", "schreib ihm ok", "sag ihr ich komme", "reply to him"):
+        assert asks_to_send(command)
+    for question in ("Was schreibt Max?", "Was sagt sie?", "lies meine Nachrichten", "wer hat geantwortet",
+                     "sag mir, was er schreibt", "tell me what he wrote", "was steht im text"):
+        assert not asks_to_send(question)
+
+
+def test_writing_style_lines_can_be_imported_seen_and_deleted(tmp_path, monkeypatch):
+    from mitauri import style
+    monkeypatch.setattr(style, "_ask_claude", lambda prompt, cwd: "short, lowercase")
+
+    async def test(session):
+        lines = json.dumps({"lines": [f"jo {word}" for word in "abcdefghijkl"]}).encode()
+        assert (await session.post(f"{BASE}/style-lines", data=lines)).status == 401
+        assert (await session.post(f"{BASE}/style-lines", data=lines, headers=signed("POST", "/style-lines", lines))).status == 200
+        for _ in range(50):
+            notes = await (await session.get(f"{BASE}/style", headers=signed("GET", "/style"))).json()
+            if notes["friends"]:
+                break
+            await asyncio.sleep(0.05)
+        assert notes == {"friends": "short, lowercase", "mitauri": ""}
+        assert (await session.delete(f"{BASE}/style", headers=signed("DELETE", "/style"))).status == 200
+        notes = await (await session.get(f"{BASE}/style", headers=signed("GET", "/style"))).json()
+        assert notes == {"friends": "", "mitauri": ""}
     with_api(test, tmp_path)
 
 

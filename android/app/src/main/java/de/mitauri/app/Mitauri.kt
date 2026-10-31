@@ -357,6 +357,11 @@ object Mitauri {
             when (data.optString("type")) {
                 "reply" -> main.post { onReply(data.getString("text")) }
                 "door_command" -> main.post { DoorOpener.command(app) }
+                "send_reply" -> main.post {
+                    NotificationAccess.sendDirectly(app, data.getString("notification"), data.getString("text")) { result ->
+                        webSocket.send(JSONObject().put("result", result).put("type", "answer").put("id", data.getString("id")).toString())
+                    }
+                }
                 "open_door", "read_notifications", "ask_to_reply", "add_place_reminder", "list_place_reminders", "remove_place_reminder" -> main.post { answerRequest(webSocket, data) }
                 "ring", "notify", "alarm", "alarm_over", "live_show", "live_clear" -> {
                     // Tells the server it arrived, so it can fall back to Discord if it didn't.
@@ -414,6 +419,31 @@ object Mitauri {
                 // Likewise, if the answer was unreadable.
             }
         }.start()
+    }
+
+    /** The user's own lines only, for learning how they write. */
+    fun sendStyleLines(lines: List<String>) {
+        socket?.send(JSONObject().put("type", "style_lines").put("lines", JSONArray(lines)).toString())
+    }
+
+    /** Call off the main thread. */
+    fun importStyleLines(lines: List<String>): Boolean {
+        val body = JSONObject().put("lines", JSONArray(lines)).toString().toByteArray()
+        return slowClient.newCall(signedRequest("style-lines", "POST", body).build()).execute().use { it.isSuccessful }
+    }
+
+    /** Call off the main thread. How the user writes to friends, then to Mitauri. */
+    fun fetchStyle(): Pair<String, String> {
+        slowClient.newCall(signedRequest("style", "GET", ByteArray(0)).build()).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("Server returned ${response.code}")
+            val notes = JSONObject(response.body!!.string())
+            return notes.optString("friends") to notes.optString("mitauri")
+        }
+    }
+
+    /** Call off the main thread. */
+    fun clearStyle() {
+        slowClient.newCall(signedRequest("style", "DELETE", ByteArray(0)).build()).execute().close()
     }
 
     /** So a countdown the user dismissed doesn't come back on the next reconnect. */

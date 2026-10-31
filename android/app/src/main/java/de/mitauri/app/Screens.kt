@@ -365,10 +365,13 @@ fun MemoryScreen(onBack: () -> Unit) {
     var confirmForget by remember { mutableStateOf<Memory?>(null) }
     var confirmNew by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
+    var confirmStyle by remember { mutableStateOf(false) }
+    var style by remember { mutableStateOf<Pair<String, String>?>(null) }
     val scope = rememberCoroutineScope()
     suspend fun reload() {
         try {
             memories = withContext(Dispatchers.IO) { Mitauri.fetchMemories() }
+            style = withContext(Dispatchers.IO) { Mitauri.fetchStyle() }
         } catch (_: Exception) {
             message = "The server can't be reached right now."
         }
@@ -419,6 +422,28 @@ fun MemoryScreen(onBack: () -> Unit) {
     if (confirmNew) {
         NewChatDialog({ confirmNew = false }) { message = "New chat started. The old history is deleted." }
     }
+    if (confirmStyle) {
+        AlertDialog(
+            onDismissRequest = { confirmStyle = false },
+            title = { Text("Forget how you write?") },
+            text = { Text("The description and all the lines it was learned from are deleted. It starts learning again from new messages.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmStyle = false
+                    scope.launch {
+                        try {
+                            withContext(Dispatchers.IO) { Mitauri.clearStyle() }
+                            style = "" to ""
+                            message = "Forgotten."
+                        } catch (_: Exception) {
+                            message = "The server can't be reached right now."
+                        }
+                    }
+                }) { Text("Forget", color = MitauriColors.Danger) }
+            },
+            dismissButton = { TextButton(onClick = { confirmStyle = false }) { Text("Keep") } },
+        )
+    }
     ScreenScaffold("Memories and privacy", onBack) {
         Text(
             "What Mitauri remembers about you. Tap something to forget it. It can still recall it in the current conversation until you start a new chat.",
@@ -438,6 +463,22 @@ fun MemoryScreen(onBack: () -> Unit) {
                     if (index > 0) Divider()
                     ListRow(memory.text, onClick = { confirmForget = memory })
                 }
+            }
+        }
+        SectionLabel("How you write")
+        val notes = style
+        when {
+            notes == null -> Text("Loading…", color = MitauriColors.Muted)
+            notes.first.isBlank() && notes.second.isBlank() -> Text(
+                "Nothing learned yet. To teach it faster, export a WhatsApp chat without media and share it with Mitauri.",
+                color = MitauriColors.Muted,
+            )
+            else -> Group {
+                if (notes.first.isNotBlank()) ListRow("To friends", notes.first)
+                if (notes.first.isNotBlank() && notes.second.isNotBlank()) Divider()
+                if (notes.second.isNotBlank()) ListRow("To Mitauri", notes.second)
+                Divider()
+                ListRow("Forget how I write", "Deletes this and the lines it was learned from", R.drawable.ic_lock, titleColor = MitauriColors.Danger, onClick = { confirmStyle = true })
             }
         }
         SectionLabel("History")

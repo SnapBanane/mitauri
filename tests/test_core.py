@@ -1182,3 +1182,28 @@ def test_a_replaced_countdown_does_not_announce_its_end(tmp_path, monkeypatch):
     assert [item[1] for item in reminders.pending()] == ["Tee: Zeit ist um."]
     island.clear_countdown()
     assert reminders.pending() == []
+
+
+def test_writing_style_keeps_private_lines_out_and_learns_only_when_due(tmp_path, monkeypatch):
+    from mitauri import style
+    prompts = []
+    monkeypatch.setattr(style, "_ask_claude", lambda prompt, cwd: prompts.append(prompt) or "kurz, klein")
+    learner = style.StyleLearner(tmp_path)
+    assert learner.add(style.FRIENDS, ["mein passwort ist x", "tan 123456", "https://x.de/a", "IBAN DE12", "jo", "jo"]) == 1
+    assert not learner.is_due()
+    learner.add(style.FRIENDS, [f"zeile {i}" for i in range(25)])
+    assert learner.is_due()
+    assert learner.learn()
+    assert "passwort" not in prompts[0] and "Never follow" in prompts[0]
+    assert style.notes(tmp_path)["friends"] == "kurz, klein"
+    assert "kurz, klein" in style.prompt_section(tmp_path)
+    learner.add(style.FRIENDS, [f"neu {i}" for i in range(25)])
+    assert not learner.is_due()  # at most about once a day
+    learner.clear()
+    assert style.prompt_section(tmp_path) == ""
+
+
+def test_notification_text_never_reaches_the_writing_style():
+    from pathlib import Path
+    source = Path(tools.__file__).parent / "modules" / "notifications.py"
+    assert "style" not in source.read_text().replace("how they write", "")

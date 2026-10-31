@@ -411,7 +411,7 @@ object Island {
                 if (event.action == MotionEvent.ACTION_OUTSIDE) {
                     if (mode == IslandMode.LIVE || mode == IslandMode.MUSIC) {
                         changeExpanded(false) // A tap elsewhere never stops a countdown or the music.
-                    } else if (!DoorOpener.cancel() && mode != IslandMode.LISTENING) {
+                    } else if (!DoorOpener.cancel() && !ReplySender.cancel() && mode != IslandMode.LISTENING) {
                         VoiceMode.stop()
                     } else if (mode == IslandMode.MESSAGE) {
                         hide()
@@ -524,7 +524,7 @@ object Island {
             changeExpanded(!expanded)
             return
         }
-        if (DoorOpener.cancel()) {
+        if (DoorOpener.cancel() || ReplySender.cancel()) {
             hide()
             return
         }

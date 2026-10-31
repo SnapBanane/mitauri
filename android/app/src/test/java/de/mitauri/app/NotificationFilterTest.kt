@@ -29,4 +29,33 @@ class NotificationFilterTest {
     fun limitsLength() {
         assertEquals(500, NotificationFilter.clean("x".repeat(900)).length)
     }
+
+    @Test fun readsWhatsAppExports() {
+        val lines = ChatExport.parse(
+            """
+            31.10.26, 20:44 - Nachrichten und Anrufe sind Ende-zu-Ende-verschlüsselt.
+            31.10.26, 20:44 - Alex: jo bin gleich da
+            und bring chips mit
+            31.10.26, 20:45 - Max: <Medien ausgelassen>
+            [31.10.26, 20:46:12] Max: ok: passt
+            10/31/26, 8:47 PM - Alex: lol
+            """.trimIndent(),
+        )
+        assertEquals(
+            listOf(
+                ExportLine("Alex", "jo bin gleich da und bring chips mit"),
+                ExportLine("Max", "ok: passt"),
+                ExportLine("Alex", "lol"),
+            ),
+            lines,
+        )
+        assertEquals(listOf("Alex" to 2, "Max" to 1), ChatExport.senders(lines))
+    }
+
+    @Test fun onlyTheUsersOwnLinesCount() {
+        assertEquals(true, OwnLines.isOwn(null, "Alex"))
+        assertEquals(true, OwnLines.isOwn("Alex", "Alex"))
+        assertEquals(false, OwnLines.isOwn("Max", "Alex"))
+        assertEquals(false, OwnLines.isOwn("Max", null))
+    }
 }

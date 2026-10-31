@@ -33,7 +33,7 @@ import androidx.compose.ui.unit.sp
 import androidx.fragment.app.FragmentActivity
 import java.time.LocalTime
 
-/** Nothing is ever sent without you seeing the exact text and proving it's you. */
+/** For replies you didn't directly type a command for: nothing goes out until you see the exact text and prove it's you. */
 class ReplyActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -80,7 +80,7 @@ class ReplyActivity : FragmentActivity() {
         }
     }
 
-    private companion object {
+    companion object {
         val LATE_NIGHT_HOURS = 1..5
     }
 

@@ -148,6 +148,18 @@ PINs, TANs, codes or card numbers aren't kept. Discord chats, photos and tool re
 Mitauri's own replies can repeat parts of them. There's no expiry: delete it all under Settings > Memories and
 privacy. "New chat" doesn't delete it.
 
+## How you write
+
+Mitauri learns how you write so that replies sound like you, not like an assistant. It uses your messages to it, your
+own lines when an allowed app's notification includes them, and any WhatsApp chat you share with it: export a chat
+without media, share it to "Learn my writing style" and pick which sender is you. Only your own lines leave the phone;
+everyone else's stay out. Lines that look like codes, passwords or links are skipped. They stay in the private data
+folder and Haiku sums them up about once a day. See or delete the result under Memories and privacy.
+
+Replies you command by typing, like "antworte Max: bin gleich da", go out after 4 seconds in which the island shows the
+exact text. Tap anywhere to cancel. Each typed message allows one reply. Anything else, including voice until voices
+are recognised, replies from 1 to 5 am, or a second reply, goes to the fingerprint screen. A locked phone never sends.
+
 ## Island
 
 "Stell einen Timer auf 10 Minuten" shows a live countdown in the island at the top of the screen. Tap it to see the
