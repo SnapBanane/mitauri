@@ -31,7 +31,7 @@ MAX_MESSAGE_CHARS = 20_000
 MAX_SPEECH_CHARS = 2_000
 LOOPBACK = ("127.0.0.1", "::1")
 DEVICE = web.RequestKey("device", str)
-INTERNAL_PATHS = ("/location", "/door", "/notifications", "/reply", "/place-reminders", "/presence")
+INTERNAL_PATHS = ("/location", "/door", "/notifications", "/reply", "/place-reminders", "/presence", "/alarm-notice")
 MAX_REPLY_CHARS = 1_000
 JPEG_START = b"\xff\xd8\xff"
 
@@ -120,6 +120,7 @@ class Api:
         app.router.add_get("/notifications", self._on_read_notifications)
         app.router.add_post("/reply", self._on_ask_to_reply)
         app.router.add_post("/place-reminders", self._on_place_reminder)
+        app.router.add_post("/alarm-notice", self._on_alarm_notice)
         app.router.add_get("/presence", self._on_presence)
         app.router.add_get("/presence-key", self._on_presence_key)
         app.router.add_post("/photo", self._on_photo)
@@ -340,6 +341,15 @@ class Api:
         answer.pop("type", None)
         record(self._data_dir, "phone_request", kind=kind, ok="error" not in answer)
         return web.json_response(answer)
+
+    async def _on_alarm_notice(self, request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+            over = bool(data["over"])
+            text = str(data.get("text", ""))[:MAX_SPEECH_CHARS]
+        except (ValueError, KeyError, TypeError):
+            raise web.HTTPBadRequest() from None
+        return web.json_response({"delivered": await self.deliver("alarm_over" if over else "alarm", text)})
 
     async def _on_presence(self, _: web.Request) -> web.Response:
         if self._presence is None:

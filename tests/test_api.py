@@ -393,6 +393,20 @@ def test_stop_only_means_the_alarm_while_it_is_ringing(tmp_path):
     with_api(test, tmp_path)
 
 
+def test_alarm_notice_reaches_the_phone_and_needs_the_internal_token(tmp_path):
+    async def test(session):
+        body = {"over": False, "text": "Test"}
+        assert (await session.post(f"{BASE}/alarm-notice", json=body)).status == 401
+        assert (await (await session.post(f"{BASE}/alarm-notice", json=body, headers=INTERNAL)).json())["delivered"] is False
+        async with connect(session) as socket:
+            request = asyncio.create_task(session.post(f"{BASE}/alarm-notice", json=body, headers=INTERNAL))
+            asked = await socket.receive_json()
+            assert (asked["type"], asked["text"]) == ("alarm", "Test")
+            await socket.send_json({"type": "ack", "id": asked["id"]})
+            assert (await (await request).json())["delivered"] is True
+    with_api(test, tmp_path)
+
+
 def test_voice_returns_transcript_and_reply(tmp_path):
     async def test(session):
         response = await session.post(f"{BASE}/voice", data=b"audio", headers=signed("POST", "/voice", b"audio"))

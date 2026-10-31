@@ -917,7 +917,8 @@ def test_alarm_audio_starts_with_silence_then_an_audible_tone_and_keeps_the_word
         samples = np.frombuffer(file.readframes(file.getnframes()), dtype=np.int16)
     assert (rate, wake.wav_seconds(audio) > 4) == (22050, True)
     assert not samples[: int(rate * wake.LEAD_IN_SECONDS)].any()
-    assert np.abs(samples[int(rate * wake.LEAD_IN_SECONDS):int(rate * 3)]).max() > 15000
+    chime = samples[int(rate * wake.LEAD_IN_SECONDS):int(rate * 3)]
+    assert 8000 < np.abs(chime).max() < 20000  # audible, but well below the fire alarm it used to be
     assert (samples[-rate:] == 16).all()  # the words come last, untouched
 
 

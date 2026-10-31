@@ -1,14 +1,16 @@
 import argparse
 import asyncio
+import json
 import logging
 import os
 import sys
+from urllib.request import Request, urlopen
 
 from . import proposals, wake
 from .api import Api, load_token
 from .auth import Devices
 from .brain import Brain, BrainError, prune_transcripts
-from .config import load_config, new_token
+from .config import API_PORT, load_config, new_token
 from .memory import Memory
 from .presence import Presence, load_key
 from .reminders import Reminders
@@ -58,10 +60,14 @@ def main() -> None:
         settings = wake.load_settings(config.data_dir)
         audio = wake.with_tone(Speech(config.data_dir).synthesize("Das ist ein Test von Mitauri. Guten Morgen!", "de"))
         print("Playing once on", settings["device"], "- press Ctrl+C or run mitauri wake-stop to stop it")
+        reached = alarm_notice(config.data_dir, over=False, text="Test des Weckers")
+        print("Phone notification:", "sent" if reached else "not delivered. Is the server running and the phone connected?")
         try:
             wake.play(settings["device"], audio, wake.wav_seconds(audio), settings["volume"], config.data_dir, repeats=1)
         except KeyboardInterrupt:
             pass
+        finally:
+            alarm_notice(config.data_dir, over=True)
         print("Done.")
         return
 
@@ -108,6 +114,20 @@ def main() -> None:
         asyncio.run(serve(bot, token, api, brain))
     except KeyboardInterrupt:
         pass
+
+
+def alarm_notice(data_dir, over: bool, text: str = "") -> bool:
+    """Asks the running server to tell the phone. Without a server, the test still plays."""
+    request = Request(
+        f"http://127.0.0.1:{API_PORT}/alarm-notice",
+        data=json.dumps({"over": over, "text": text}).encode(),
+        headers={"Authorization": f"Bearer {load_token(data_dir)}", "Content-Type": "application/json"},
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            return bool(json.load(response).get("delivered"))
+    except (OSError, ValueError):
+        return False
 
 
 def review_proposal(action: str, proposal_id: str | None) -> None:

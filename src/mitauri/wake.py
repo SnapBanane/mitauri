@@ -28,10 +28,13 @@ CAST_SETTLE_SECONDS = 1
 STOP_FILE = "wake_stop"
 RINGING_FILE = "wake_ringing"
 LEAD_IN_SECONDS = 2.0
-TONE_PITCHES = (660.0, 880.0, 1100.0)
-TONE_SECONDS = 0.22
-TONE_ROUNDS = 3
-TONE_LOUDNESS = 0.6
+MELODY = (392.0, 523.25, 659.25, 783.99)  # G, C, E, G
+MELODY_ROUNDS = 2
+NOTE_SPACING_SECONDS = 0.5
+NOTE_RING_SECONDS = 1.8
+NOTE_ATTACK_SECONDS = 0.012
+NOTE_DECAY = 2.6
+CHIME_LOUDNESS = 0.45
 CAST_TIMEOUT_SECONDS = 15
 AUDIO_PORT = 8767  # fixed, so a firewall can allow just this
 
@@ -114,12 +117,10 @@ def with_tone(speech: bytes) -> bytes:
     with wave.open(io.BytesIO(speech)) as file:
         rate, width, channels = file.getframerate(), file.getsampwidth(), file.getnchannels()
         words = file.readframes(file.getnframes())
-    parts = [_silence(LEAD_IN_SECONDS, rate, channels)]
-    for _ in range(TONE_ROUNDS):
-        for pitch in TONE_PITCHES:
-            parts += [_beep(pitch, rate, channels), _silence(0.08, rate, channels)]
-        parts.append(_silence(0.35, rate, channels))
-    parts += [_silence(0.4, rate, channels), np.frombuffer(words, dtype=np.int16).tobytes()]
+    parts = [
+        _silence(LEAD_IN_SECONDS, rate, channels), _chime(rate, channels),
+        np.frombuffer(words, dtype=np.int16).tobytes(),
+    ]
     output = io.BytesIO()
     with wave.open(output, "wb") as file:
         file.setnchannels(channels)
@@ -133,10 +134,19 @@ def _silence(seconds: float, rate: int, channels: int) -> bytes:
     return bytes(2 * channels * int(seconds * rate))
 
 
-def _beep(pitch: float, rate: int, channels: int) -> bytes:
-    times = np.arange(int(TONE_SECONDS * rate)) / rate
-    fade = np.minimum(1, np.minimum(times, TONE_SECONDS - times) / 0.015)  # no clicks at the edges
-    samples = (np.sin(2 * np.pi * pitch * times) * fade * TONE_LOUDNESS * 32767).astype(np.int16)
+def _chime(rate: int, channels: int) -> bytes:
+    """A soft rising melody, like a marimba: each note starts gently and rings out."""
+    length = NOTE_SPACING_SECONDS * len(MELODY) * MELODY_ROUNDS + NOTE_RING_SECONDS
+    mix = np.zeros(int(length * rate))
+    times = np.arange(int(NOTE_RING_SECONDS * rate)) / rate
+    envelope = np.minimum(times / NOTE_ATTACK_SECONDS, 1) * np.exp(-times * NOTE_DECAY)
+    for index in range(len(MELODY) * MELODY_ROUNDS):
+        pitch = MELODY[index % len(MELODY)]
+        # Mostly the pure note, with a little of its octave for warmth.
+        note = (np.sin(2 * np.pi * pitch * times) + 0.25 * np.sin(4 * np.pi * pitch * times)) * envelope
+        start = int(index * NOTE_SPACING_SECONDS * rate)
+        mix[start:start + len(note)] += note
+    samples = (mix / np.abs(mix).max() * CHIME_LOUDNESS * 32767).astype(np.int16)
     return np.repeat(samples, channels).tobytes()
 
 
