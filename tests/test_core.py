@@ -1153,7 +1153,7 @@ def test_countdown_tool_limits_its_input_and_sets_a_reminder(tmp_path, monkeypat
     assert (len(sent[0]["title"]), len(sent[0]["detail"]), sent[0]["seconds"]) == (30, 200, 600)
     assert len(Reminders(tmp_path / "reminders.db").pending()) == 1
     tools.start_countdown("Ohne", 5, remind_at_end=False)
-    assert len(Reminders(tmp_path / "reminders.db").pending()) == 1
+    assert len(Reminders(tmp_path / "reminders.db").pending()) == 0  # it replaced the one above
 
 
 def test_startup_summary_shows_what_is_in_use_and_no_secrets(tmp_path, monkeypatch):
@@ -1169,3 +1169,16 @@ def test_startup_summary_shows_what_is_in_use_and_no_secrets(tmp_path, monkeypat
 def test_split_message():
     parts = split_message("x" * (MAX_MESSAGE_LENGTH + 1))
     assert [len(p) for p in parts] == [MAX_MESSAGE_LENGTH, 1]
+
+
+def test_a_replaced_countdown_does_not_announce_its_end(tmp_path, monkeypatch):
+    from mitauri.modules import island
+    monkeypatch.setattr(island, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(island.toolbox, "ask_server", lambda path, body: {"delivered": True})
+    reminders = island.Reminders(tmp_path / "reminders.db")
+
+    island.start_countdown("Pizza", 10)
+    island.start_countdown("Tee", 3)
+    assert [item[1] for item in reminders.pending()] == ["Tee: Zeit ist um."]
+    island.clear_countdown()
+    assert reminders.pending() == []

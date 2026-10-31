@@ -12,6 +12,14 @@ MAX_PENDING_REMINDERS = 100
 tool = toolbox.tool_for("island")
 
 
+def _cancel_reminder() -> None:
+    """A replaced or cleared countdown must not still announce its end."""
+    saved = data_dir() / "countdown-reminder"
+    if saved.exists():
+        Reminders(data_dir() / "reminders.db").remove(int(saved.read_text()))
+        saved.unlink()
+
+
 @tool
 def start_countdown(title: str, minutes: float, detail: str | None = None, remind_at_end: bool = True) -> dict:
     """Show a live countdown in the phone's island, like a timer. Use it when the user asks for a timer.
@@ -24,14 +32,19 @@ def start_countdown(title: str, minutes: float, detail: str | None = None, remin
     answer = toolbox.ask_server("/island", {
         "action": "show", "title": title[:MAX_TITLE_CHARS], "seconds": round(minutes * 60), "detail": (detail or "")[:MAX_DETAIL_CHARS],
     })
-    if remind_at_end and "error" not in answer:
+    if "error" in answer:
+        return answer
+    _cancel_reminder()
+    if remind_at_end:
         reminders = Reminders(data_dir() / "reminders.db")
         if len(reminders.pending()) < MAX_PENDING_REMINDERS:
-            reminders.add(f"{title[:MAX_TITLE_CHARS]}: Zeit ist um.", datetime.now(timezone.utc) + timedelta(minutes=minutes))
+            reminder = reminders.add(f"{title[:MAX_TITLE_CHARS]}: Zeit ist um.", datetime.now(timezone.utc) + timedelta(minutes=minutes))
+            (data_dir() / "countdown-reminder").write_text(str(reminder))
     return answer
 
 
 @tool
 def clear_countdown() -> dict:
-    """Remove the countdown from the island. Any reminder set with it stays, so cancel that separately."""
+    """Remove the countdown from the island, along with the reminder set with it."""
+    _cancel_reminder()
     return toolbox.ask_server("/island", {"action": "clear"})

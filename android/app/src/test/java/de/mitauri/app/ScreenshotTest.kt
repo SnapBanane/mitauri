@@ -1,13 +1,16 @@
 package de.mitauri.app
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import app.cash.paparazzi.DeviceConfig
 import app.cash.paparazzi.Paparazzi
@@ -39,7 +42,10 @@ class ScreenshotTest {
         onDraft = {}, onDoor = {}, onNewChat = {}, onSettings = {}, onVoice = {}, onPhoto = {}, onSend = {},
     )
 
-    @Test fun chatEmpty() = show { chat(emptyList()) }
+    @Test fun chatEmpty() {
+        currentHour = { 12 }
+        show { chat(emptyList()) }
+    }
     @Test fun chatConversation() = show { chat(conversation, draft = "Danke!", waiting = true) }
 
     @Test fun modules() = show {
@@ -54,11 +60,26 @@ class ScreenshotTest {
         )
     }
 
-    private fun pill(live: LiveCountdown, expanded: Boolean, seconds: Long) = show {
-        Box(Modifier.padding(top = 12.dp).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-            Pill(IslandMode.LIVE, "", true, live, expanded, clock = { live.untilMillis - seconds * 1000 }) {}
+    // The user's phone: an 80 pixel cutout at the top, at 2.75 pixels per dp. Drawn in grey to check the alignment.
+    private val camera = CameraHole(29.dp, 14.5.dp)
+
+    private fun onScreen(pill: @Composable () -> Unit) = show {
+        Box(Modifier.padding(top = 2.dp).fillMaxWidth(), contentAlignment = Alignment.TopCenter) { pill() }
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+            Canvas(Modifier.size(29.dp)) { drawCircle(Color.DarkGray, radius = size.minDimension / 4) }
         }
     }
+
+    private fun pill(live: LiveCountdown, expanded: Boolean, seconds: Long) = onScreen {
+        Pill(IslandMode.LIVE, "", true, live, expanded, clock = { live.untilMillis - seconds * 1000 }, camera = camera) {}
+    }
+
+    private val song = NowPlaying("Bohemian Rhapsody - Remastered 2011", "Queen", null, true)
+
+    @Test fun islandMusic() = onScreen { Pill(IslandMode.MUSIC, "", true, music = song, camera = camera) {} }
+    @Test fun islandMusicExpanded() = onScreen { Pill(IslandMode.MUSIC, "", true, expanded = true, music = song, camera = camera) {} }
+    @Test fun islandListening() = onScreen { Pill(IslandMode.LISTENING, "Listening", true, camera = camera) {} }
+    @Test fun islandMessage() = onScreen { Pill(IslandMode.MESSAGE, "Opening door, tap to cancel", true, camera = camera) {} }
 
     private val timer = LiveCountdown("Pizza", 10_000_000L, "")
     private val leave = LiveCountdown("Losgehen", 10_000_000L, "S 1 ab Pasing um 07:42")

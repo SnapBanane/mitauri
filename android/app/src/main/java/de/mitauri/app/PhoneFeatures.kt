@@ -38,10 +38,12 @@ object Door {
 class NotificationWatcher : NotificationListenerService() {
     override fun onListenerConnected() {
         instance = this
+        Music.start(this)
     }
 
     override fun onListenerDisconnected() {
         if (instance === this) instance = null
+        Music.stop()
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {

@@ -416,6 +416,11 @@ object Mitauri {
         }.start()
     }
 
+    /** So a countdown the user dismissed doesn't come back on the next reconnect. */
+    fun dismissLive() {
+        socket?.send(JSONObject().put("type", "live_dismissed").toString())
+    }
+
     fun stopAlarm() {
         socket?.send(JSONObject().put("type", "stop_alarm").toString())
     }

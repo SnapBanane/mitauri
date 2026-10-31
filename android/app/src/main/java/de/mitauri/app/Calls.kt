@@ -433,7 +433,7 @@ private fun LiveStatus() {
         IslandMode.LISTENING -> "Listening" to MitauriColors.Success
         IslandMode.THINKING -> "Thinking" to MitauriColors.AccentSoft
         IslandMode.SPEAKING -> "Speaking" to MitauriColors.AccentSoft
-        IslandMode.MESSAGE, IslandMode.LIVE -> Island.currentText to MitauriColors.Warning
+        IslandMode.MESSAGE, IslandMode.LIVE, IslandMode.MUSIC -> Island.currentText to MitauriColors.Warning
     }
     Row(
         Modifier

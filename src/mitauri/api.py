@@ -266,6 +266,8 @@ class Api:
             task.add_done_callback(self._tasks.discard)
         elif data["type"] == "stop_alarm":
             wake.request_stop(self._data_dir)
+        elif data["type"] == "live_dismissed":
+            self._live = None
         elif data["type"] in ("location", "ack", "answer"):
             future = self._pending.get(data["id"])
             if future and not future.done():

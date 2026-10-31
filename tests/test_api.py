@@ -458,6 +458,23 @@ def test_countdown_reaches_the_phone_and_returns_after_reconnecting(tmp_path):
     with_api(test, tmp_path)
 
 
+def test_a_dismissed_countdown_stays_away_after_reconnecting(tmp_path):
+    async def test(session):
+        body = {"action": "show", "title": "Pizza", "seconds": 600}
+        async with connect(session) as socket:
+            request = asyncio.create_task(session.post(f"{BASE}/island", json=body, headers=INTERNAL))
+            event = await socket.receive_json()
+            await socket.send_json({"type": "ack", "id": event["id"]})
+            await request
+            await socket.send_json({"type": "live_dismissed"})
+            await socket.send_json({"type": "message", "id": "1", "text": "hi"})
+            assert (await socket.receive_json())["type"] == "reply"
+        async with connect(session) as socket:
+            await socket.send_json({"type": "message", "id": "2", "text": "hi"})
+            assert (await socket.receive_json())["type"] == "reply"  # no countdown comes back
+    with_api(test, tmp_path)
+
+
 def test_voice_returns_transcript_and_reply(tmp_path):
     async def test(session):
         response = await session.post(f"{BASE}/voice", data=b"audio", headers=signed("POST", "/voice", b"audio"))

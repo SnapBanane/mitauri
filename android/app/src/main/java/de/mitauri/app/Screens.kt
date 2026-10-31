@@ -565,7 +565,10 @@ private fun Header(status: Status, needsSetup: Boolean, onDoor: () -> Unit, onNe
     HorizontalDivider(color = MitauriColors.Hairline, thickness = 0.5.dp)
 }
 
-private fun greeting(): String = when (LocalTime.now().hour) {
+/** Replaced in screenshot tests, which must not depend on the time of day. */
+internal var currentHour: () -> Int = { LocalTime.now().hour }
+
+private fun greeting(): String = when (currentHour()) {
     in 5..10 -> "Good morning"
     in 11..17 -> "Hello"
     in 18..22 -> "Good evening"
