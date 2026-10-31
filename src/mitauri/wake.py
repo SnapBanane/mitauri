@@ -144,6 +144,8 @@ def sound_until_stopped(player, seconds: float, should_stop, deadline: float, re
     """Plays over and over. Returns True if something stopped it, like the app or "Hey Google, stopp"."""
     played = 0
     while time.monotonic() < deadline and (repeats is None or played < repeats):
+        if should_stop():
+            return True
         played += 1
         player.start()
         ends = time.monotonic() + seconds + 1

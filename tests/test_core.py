@@ -938,7 +938,7 @@ def test_alarm_stops_on_request_on_the_speaker_or_at_its_limit(monkeypatch):
     monkeypatch.setattr(wake, "GAP_SECONDS", 0)
     far = clock.monotonic() + 60
     player = FakePlayer()
-    assert wake.sound_until_stopped(player, -1, lambda: True, far) is False or player.starts >= 1
+    assert wake.sound_until_stopped(player, -1, lambda: True, far) is True and player.starts == 0
     player = FakePlayer()
     calls = iter([False, True])
     assert wake.sound_until_stopped(player, 0, lambda: next(calls, True), far) is True
