@@ -28,7 +28,9 @@ import android.widget.FrameLayout
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
@@ -105,6 +107,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
@@ -129,7 +133,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-enum class IslandMode { LISTENING, THINKING, SPEAKING, MESSAGE, LIVE, MUSIC }
+enum class IslandMode {
+    LISTENING, THINKING, SPEAKING, MESSAGE, LIVE, MUSIC;
+
+    val isVoice get() = this == LISTENING || this == THINKING || this == SPEAKING
+}
 
 data class LiveCountdown(val title: String, val untilMillis: Long, val detail: String)
 
@@ -148,6 +156,7 @@ private val ROW_HEIGHT = 22.dp
 private val PILL_MAX_WIDTH = 340.dp
 private val DRAWING_HEIGHT = 320.dp
 private val TEXT_FADE = 12.dp
+private val VOICE_TEXT_WIDTH = 64.dp
 private val PILL_MAX_RADIUS = 30.dp
 private val MUSIC_TITLE_WIDTH = 58.dp // Leaves the status bar icons on both sides uncovered.
 private val CAMERA_MARGIN = 2.dp
@@ -599,7 +608,8 @@ fun Pill(
         content = {
             Box(Modifier.onSizeChanged { target = it }) {
                 AnimatedContent(
-                    targetState = mode to expanded,
+                    // Voice's steps share one scene, so moving between them changes the pill's insides, not the pill.
+                    targetState = (if (mode.isVoice) IslandMode.LISTENING else mode) to expanded,
                     transitionSpec = {
                         (fadeIn(tween(240, 90)) + scaleIn(spring(dampingRatio = 0.8f, stiffness = 380f), initialScale = 0.9f)) togetherWith
                             fadeOut(tween(160)) using SizeTransform(clip = false) { _, _ -> snap() }
@@ -615,21 +625,8 @@ fun Pill(
                             shownMode == IslandMode.LIVE && live != null -> LiveContent(live, open, camera, clock, onExpired, onDismiss)
                             shownMode == IslandMode.MUSIC && music != null ->
                                 if (open) MusicExpanded(music, sound, onMusic, onSeek) else MusicCompact(music, sound, camera)
-                            shownMode == IslandMode.MESSAGE -> {
-                                AroundCamera(camera, { Bars(shownMode) }, { Label("Mitauri", MitauriColors.Muted) })
-                                Text(
-                                    text,
-                                    Modifier.padding(top = 8.dp, bottom = 6.dp),
-                                    color = Color.White,
-                                    fontSize = 14.sp,
-                                    lineHeight = 19.sp,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            else -> AroundCamera(camera, { Bars(shownMode) }, {
-                                Crossfade(text, animationSpec = tween(160), label = "text") { Label(it) }
-                            })
+                            shownMode == IslandMode.MESSAGE -> MessageContent(text, camera)
+                            else -> VoiceContent(mode, text, camera)
                         }
                     }
                 }
@@ -1062,28 +1059,89 @@ private fun MusicIcon(action: MusicAction, playing: Boolean, iconSize: Dp) {
     }
 }
 
+/** Mitauri's face where a song has its cover, then the bars beside the camera, so every state has the same shape. */
+@Composable
+private fun VoiceLeading(mode: IslandMode) {
+    Row(
+        Modifier.width(MUSIC_TITLE_WIDTH),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Image(
+            painterResource(R.drawable.logo_mark),
+            null,
+            Modifier.offset(x = -PILL_EDGE).size(ROW_HEIGHT),
+        )
+        Bars(mode)
+    }
+}
+
+@Composable
+private fun VoiceContent(mode: IslandMode, text: String, camera: CameraHole) {
+    // While fading out into the next state, this keeps showing what it was showing.
+    var shownMode by remember { mutableStateOf(IslandMode.LISTENING) }
+    var shownText by remember { mutableStateOf(text) }
+    if (mode.isVoice) {
+        shownMode = mode
+        shownText = text
+    }
+    AroundCamera(camera, { VoiceLeading(shownMode) }, {
+        Crossfade(shownText, Modifier.widthIn(max = VOICE_TEXT_WIDTH), animationSpec = tween(180), label = "text") { Label(it) }
+    })
+}
+
+@Composable
+private fun MessageContent(text: String, camera: CameraHole) {
+    var shownText by remember { mutableStateOf(text) }
+    if (text.isNotEmpty()) shownText = text
+    AroundCamera(camera, { VoiceLeading(IslandMode.MESSAGE) }, { Label("Mitauri", MitauriColors.Muted) })
+    Text(
+        shownText,
+        Modifier.padding(top = 8.dp, bottom = 6.dp),
+        color = Color.White,
+        fontSize = 14.sp,
+        lineHeight = 19.sp,
+        textAlign = TextAlign.Center,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+/** Listening follows your voice, thinking breathes and speaking moves more. Each change blends into the next. */
 @Composable
 private fun Bars(mode: IslandMode) {
-    val pulse by rememberInfiniteTransition(label = "pulse").animateFloat(
-        0f, (2 * Math.PI).toFloat(), infiniteRepeatable(tween(1400, easing = androidx.compose.animation.core.LinearEasing), RepeatMode.Restart), label = "pulse",
+    val phase by rememberInfiniteTransition(label = "phase").animateFloat(
+        0f, (2 * Math.PI).toFloat(), infiniteRepeatable(tween(1100, easing = LinearEasing), RepeatMode.Restart), label = "phase",
     )
-    val voice by animateFloatAsState(Island.level, spring(dampingRatio = 0.8f, stiffness = 500f), label = "voice")
-    val color = when (mode) {
-        IslandMode.LISTENING -> MitauriColors.Success
-        IslandMode.THINKING -> MitauriColors.Accent
-        IslandMode.SPEAKING -> MitauriColors.AccentSoft
-        IslandMode.MESSAGE, IslandMode.LIVE, IslandMode.MUSIC -> MitauriColors.Warning
-    }
-    Canvas(Modifier.size(width = 26.dp, height = 22.dp)) {
-        val shapes = listOf(0.55f, 1f, 0.7f, 0.9f)
+    val blend = spring<Float>(dampingRatio = 1f, stiffness = 200f)
+    val voice by animateFloatAsState(Island.level, spring(dampingRatio = 0.85f, stiffness = 600f), label = "voice")
+    val hearing by animateFloatAsState(if (mode == IslandMode.LISTENING) 1f else 0f, blend, label = "hearing")
+    val wave by animateFloatAsState(
+        when (mode) {
+            IslandMode.THINKING -> 0.3f
+            IslandMode.SPEAKING -> 1f
+            else -> 0f
+        },
+        blend,
+        label = "wave",
+    )
+    val color by animateColorAsState(
+        when (mode) {
+            IslandMode.LISTENING -> MitauriColors.Success
+            IslandMode.THINKING -> MitauriColors.Accent
+            IslandMode.SPEAKING -> MitauriColors.AccentSoft
+            IslandMode.MESSAGE, IslandMode.LIVE, IslandMode.MUSIC -> MitauriColors.Warning
+        },
+        tween(220),
+        label = "colour",
+    )
+    Canvas(Modifier.padding(end = 2.dp).size(width = 19.dp, height = 16.dp)) {
+        val shapes = listOf(0.6f, 1f, 0.75f, 0.9f)
         val barWidth = 3.dp.toPx()
         val gap = (size.width - barWidth * shapes.size) / (shapes.size - 1)
         shapes.forEachIndexed { index, shape ->
-            val energy = when (mode) {
-                IslandMode.LISTENING -> 0.25f + 0.75f * voice
-                IslandMode.THINKING, IslandMode.SPEAKING -> 0.55f + 0.45f * sin(pulse + index * 1.1f)
-                IslandMode.MESSAGE, IslandMode.LIVE, IslandMode.MUSIC -> 0.45f
-            }
+            val resting = 0.5f + 0.42f * wave * sin(phase + index * 1.1f)
+            val energy = resting + (0.25f + 0.75f * voice - resting) * hearing
             val height = (size.height * shape * energy).coerceAtLeast(barWidth)
             drawRoundRect(
                 color,

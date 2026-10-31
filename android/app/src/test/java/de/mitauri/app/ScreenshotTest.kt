@@ -82,6 +82,8 @@ class ScreenshotTest {
         Pill(IslandMode.MUSIC, "", true, expanded = true, music = paused, camera = camera) {}
     }
     @Test fun islandListening() = onScreen { Pill(IslandMode.LISTENING, "Listening", true, camera = camera) {} }
+    @Test fun islandThinking() = onScreen { Pill(IslandMode.THINKING, "Thinking", true, camera = camera) {} }
+    @Test fun islandSpeaking() = onScreen { Pill(IslandMode.SPEAKING, "Speaking", true, camera = camera) {} }
     @Test fun islandMessage() = onScreen { Pill(IslandMode.MESSAGE, "Opening door, tap to cancel", true, camera = camera) {} }
 
     private val timer = LiveCountdown("Pizza", 10_000_000L, "")

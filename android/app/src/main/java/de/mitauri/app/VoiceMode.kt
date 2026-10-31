@@ -85,7 +85,7 @@ object VoiceMode {
         appContext = app
         Mitauri.init(app)
         stop()
-        Island.show(app, IslandMode.THINKING, "One moment")
+        Island.show(app, IslandMode.THINKING, "Thinking")
         val playback = Playback(app, session, then)
         text.split(SENTENCE_END).filter { it.isNotBlank() }.forEach { playback.add(it, "de") }
         playback.finishAdding()
@@ -163,7 +163,7 @@ object VoiceMode {
     }
 
     private fun send(app: Context, recording: ByteArray, current: Int) {
-        Island.update(IslandMode.THINKING, "One moment")
+        Island.update(IslandMode.THINKING, "Thinking")
         val conversation = afterExchange
         val playback = Playback(app, current, conversation?.let { next -> { next(true) } })
         network.execute {
