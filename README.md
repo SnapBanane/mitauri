@@ -76,6 +76,15 @@ live from VRR's public timetable service, in the VRR region only.
 Say "Sag mir, wann ich los muss, um 9 Uhr in Augsburg zu sein" for a leave-now alert. It re-checks live data
 20 minutes before you need to leave, then notifies you at the right time.
 
+It adds a tip to take an umbrella if rain is likely in the next two hours.
+
+## Place reminders
+
+"Erinnere mich an die Milch, wenn ich beim Rewe in Schwabing bin" notifies you on arrival. It needs
+background location ("Allow all the time") and reminders live encrypted on the phone, so the server doesn't
+learn when you arrive. Place lookups go to VRR's service. Name the place with its city, and check which
+branch Mitauri says it found.
+
 ## Photos
 
 Tap the plus button in the chat to send a photo, like a letter or receipt. The app shrinks it and removes its
@@ -164,6 +173,12 @@ loginctl enable-linger "$USER"   # keeps it running while you're logged out
 ```
 
 Check that the paths in the service file match your device. Logs: `journalctl --user -u mitauri -f`.
+
+## Secrets in git
+
+`.git/hooks/pre-commit` runs `scripts/check-secrets.py`, which blocks commits containing your real secrets,
+common token formats or secret files. Git doesn't copy hooks when cloning, so reinstall it on a new machine:
+`printf '#!/bin/sh\nexec python3 scripts/check-secrets.py\n' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`
 
 ## Tests
 

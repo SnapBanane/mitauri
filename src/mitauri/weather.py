@@ -7,6 +7,7 @@ from urllib.request import urlopen
 URL = "https://api.open-meteo.com/v1/forecast"
 TIMEOUT_SECONDS = 15
 HOURS = 12
+RAIN_LIKELY_PERCENT = 50
 CODES = {
     0: "klar", 1: "meist klar", 2: "teils bewölkt", 3: "bewölkt", 45: "Nebel", 48: "Nebel",
     51: "leichter Niesel", 53: "Niesel", 55: "starker Niesel", 56: "gefrierender Niesel", 57: "gefrierender Niesel",
@@ -45,3 +46,10 @@ def forecast(latitude: float, longitude: float, now_hour: str | None = None) -> 
     })
     with urlopen(f"{URL}?{query}", timeout=TIMEOUT_SECONDS) as response:
         return parse_forecast(json.load(response), now_hour)
+
+
+def rain_tip(hours: list[dict]) -> str | None:
+    """Worth a mention only if rain is likely soon, in the next two hours."""
+    if any(hour["rain_chance_percent"] is not None and hour["rain_chance_percent"] >= RAIN_LIKELY_PERCENT for hour in hours[:2]):
+        return "Nimm einen Schirm mit."
+    return None

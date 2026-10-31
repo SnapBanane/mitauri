@@ -28,7 +28,7 @@ MAX_MESSAGE_CHARS = 20_000
 MAX_SPEECH_CHARS = 2_000
 LOOPBACK = ("127.0.0.1", "::1")
 DEVICE = web.RequestKey("device", str)
-INTERNAL_PATHS = ("/location", "/door", "/notifications", "/reply")
+INTERNAL_PATHS = ("/location", "/door", "/notifications", "/reply", "/place-reminders")
 MAX_REPLY_CHARS = 1_000
 JPEG_START = b"\xff\xd8\xff"
 
@@ -111,6 +111,7 @@ class Api:
         app.router.add_post("/door", self._on_open_door)
         app.router.add_get("/notifications", self._on_read_notifications)
         app.router.add_post("/reply", self._on_ask_to_reply)
+        app.router.add_post("/place-reminders", self._on_place_reminder)
         app.router.add_post("/photo", self._on_photo)
         app.router.add_post("/voice", self._on_voice)
         app.router.add_post("/speak", self._on_speak)
@@ -318,6 +319,23 @@ class Api:
         answer.pop("type", None)
         record(self._data_dir, "phone_request", kind=kind, ok="error" not in answer)
         return web.json_response(answer)
+
+    async def _on_place_reminder(self, request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+            action = str(data["action"])
+            if action == "add":
+                return await self._ask_phone(
+                    "add_place_reminder", text=str(data["text"]), latitude=float(data["latitude"]),
+                    longitude=float(data["longitude"]), radius=float(data["radius"]),
+                )
+            if action == "list":
+                return await self._ask_phone("list_place_reminders")
+            if action == "remove":
+                return await self._ask_phone("remove_place_reminder", reminder=str(data["reminder"]))
+        except (ValueError, KeyError, TypeError):
+            pass
+        raise web.HTTPBadRequest()
 
     async def _on_open_door(self, _: web.Request) -> web.Response:
         return await self._ask_phone("open_door")

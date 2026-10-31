@@ -645,6 +645,26 @@ def test_secret_check_blocks_secrets_and_never_names_them():
     assert real not in " ".join(blocked)
 
 
+def test_rain_tip_only_when_rain_is_likely_soon():
+    hour = lambda chance: {"rain_chance_percent": chance}
+    assert weather.rain_tip([hour(10), hour(20), hour(90)]) is None
+    assert "Schirm" in weather.rain_tip([hour(10), hour(60)])
+    assert weather.rain_tip([hour(None), hour(None)]) is None
+
+
+def test_place_reminder_tool_clamps_radius_and_reports_the_place(monkeypatch):
+    sent = {}
+    monkeypatch.setattr(tools.transit, "find_place", lambda name: {"coord": [48.1, 11.5], "name": "Rewe, München"})
+    monkeypatch.setattr(tools, "_ask_server", lambda path, body=None: sent.update(body) or {"result": "Set."})
+    assert "Rewe, München" in tools.remind_at_place("Milch", "Rewe München", radius_metres=5)
+    assert sent["radius"] == 100
+    assert "Not set" in tools.remind_at_place("x" * 501, "Rewe")
+
+
+def test_place_tools_are_not_on_discord():
+    assert not tools.LIMITED_TOOLS & {"remind_at_place", "list_place_reminders", "cancel_place_reminder"}
+
+
 def test_split_message():
     parts = split_message("x" * (MAX_MESSAGE_LENGTH + 1))
     assert [len(p) for p in parts] == [MAX_MESSAGE_LENGTH, 1]

@@ -23,6 +23,8 @@ from .reminders import CALL, TRIP, Reminders
 THINKING_TIMEOUT_SECONDS = 240
 LIMITED_TOOLS = {"maps_route", "think_harder", "set_reminder", "next_departures", "plan_trip"}
 TRIP_RECHECK_MINUTES = 20
+MIN_PLACE_RADIUS_METRES = 100
+MAX_PLACE_RADIUS_METRES = 1_000
 MAX_REPLY_CHARS = 1_000
 MAX_NOTES = 1_000
 MAX_TEXT_CHARS = 500
@@ -312,6 +314,46 @@ def leave_alert(origin: str, destination: str, arrive_by: str, walk_minutes: int
     check = max(now, plan["leave"] - timedelta(minutes=TRIP_RECHECK_MINUTES))
     reminders.add(json.dumps(alert), check, TRIP)
     return f"Set. Currently: leave at {plan['leave'].isoformat()} for {plan['trip']}. It re-checks live data shortly before."
+
+
+@tool
+def remind_at_place(text: str, place: str | None = None, radius_metres: int = 150) -> str:
+    """Notify the user when they reach a place. Leave place empty for where they are now.
+
+    place should include the city, like "Rewe München Schwabing". Tell the user which place was found,
+    as it may be a different branch. The watching happens only on the phone.
+    """
+    if len(text) > MAX_TEXT_CHARS:
+        return "Not set: that's too long. Shorten it."
+    radius = max(MIN_PLACE_RADIUS_METRES, min(radius_metres, MAX_PLACE_RADIUS_METRES))
+    name = "the current location"
+    if place:
+        try:
+            found = transit.find_place(place)
+        except (OSError, ValueError):
+            return "Not set: the place lookup couldn't be reached."
+        if found is None:
+            return f"Not set: I couldn't find {place}."
+        latitude, longitude, name = found["coord"][0], found["coord"][1], found.get("name", place)
+    else:
+        position = _ask_server("/location")
+        if "latitude" not in position:
+            return f"Not set: {position.get('error', 'no location')}"
+        latitude, longitude = position["latitude"], position["longitude"]
+    answer = _ask_server("/place-reminders", {"action": "add", "text": text, "latitude": latitude, "longitude": longitude, "radius": radius})
+    return f"{answer.get('result', answer.get('error', 'Not set.'))} Place: {name}."
+
+
+@tool
+def list_place_reminders() -> dict:
+    """List reminders waiting for the user to reach a place."""
+    return _ask_server("/place-reminders", {"action": "list"})
+
+
+@tool
+def cancel_place_reminder(reminder_id: str) -> dict:
+    """Cancel a place reminder by its id."""
+    return _ask_server("/place-reminders", {"action": "remove", "reminder": reminder_id})
 
 
 @tool

@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 import discord
 
-from . import proposals, research, transit
+from . import proposals, research, transit, weather
 from .audit import record
 from .brain import Brain, BrainError
 from .config import Config
@@ -131,6 +131,15 @@ class MitauriBot(discord.Client):
             if self._phone and await self._phone.deliver("notify", text):
                 proposals.mark_told(proposal["id"], self._data_dir)
 
+    def _rain_tip(self, stop_name: str) -> str | None:
+        """A bonus only, so any failure just leaves it out."""
+        try:
+            stop = transit.find_stop(stop_name)
+            now_hour = datetime.now(self._timezone).strftime("%Y-%m-%dT%H:00")
+            return weather.rain_tip(weather.forecast(*stop["coord"], now_hour))
+        except (OSError, ValueError, TypeError, KeyError):
+            return None
+
     async def _check_trip(self, text: str) -> bool:
         """Looks up live data shortly before leaving, then schedules the alert for the real time."""
         alert = json.loads(text)
@@ -143,7 +152,8 @@ class MitauriBot(discord.Client):
             plan = None
         leave = plan["leave"] if plan else datetime.fromisoformat(alert["leave"])
         trip = plan["trip"] if plan else f"{alert['trip']} (Fahrplan nicht geprüft)"
-        message = f"Zeit loszugehen: {trip}"
+        tip = await asyncio.to_thread(self._rain_tip, alert["origin"])
+        message = f"Zeit loszugehen: {trip}" + (f" {tip}" if tip else "")
         if leave <= datetime.now(timezone.utc):
             return bool(self._phone) and await self._phone.deliver("notify", message)
         self._reminders.add(message, leave)

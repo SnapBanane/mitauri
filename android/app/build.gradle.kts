@@ -15,8 +15,8 @@ android {
         applicationId = "de.mitauri.app"
         minSdk = 30
         targetSdk = 35
-        versionCode = 13
-        versionName = "0.13"
+        versionCode = 14
+        versionName = "0.14"
     }
 
     // The key stays outside the repo. See scripts/make-signing-key.sh.

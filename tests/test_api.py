@@ -344,6 +344,24 @@ def test_claude_can_never_send_a_door_command(tmp_path):
     assert 'self._ask_phone("open_door")' in Path(api_module.__file__).read_text()
 
 
+def test_place_reminder_goes_to_the_phone_and_needs_the_internal_token(tmp_path):
+    async def test(session):
+        body = {"action": "add", "text": "Milch", "latitude": 48.1, "longitude": 11.5, "radius": 150}
+        raw = json.dumps(body).encode()
+        signed_only = signed("POST", "/place-reminders", raw)
+        assert (await session.post(f"{BASE}/place-reminders", data=raw, headers=signed_only)).status == 401
+        assert (await session.post(f"{BASE}/place-reminders", json={"action": "nope"}, headers=INTERNAL)).status == 400
+        async with connect(session) as socket:
+            request = asyncio.create_task(session.post(f"{BASE}/place-reminders", json=body, headers=INTERNAL))
+            asked = await socket.receive_json()
+            assert (asked["type"], asked["text"], asked["radius"]) == ("add_place_reminder", "Milch", 150.0)
+            await socket.send_json({"type": "answer", "id": asked["id"], "result": "Set."})
+            assert await (await request).json() == {"result": "Set."}
+    with_api(test, tmp_path)
+    log = (tmp_path / "audit.log").read_text()
+    assert "Milch" not in log and "48.1" not in log
+
+
 def test_voice_returns_transcript_and_reply(tmp_path):
     async def test(session):
         response = await session.post(f"{BASE}/voice", data=b"audio", headers=signed("POST", "/voice", b"audio"))

@@ -30,6 +30,13 @@ def _now_params(moment: datetime | None = None) -> dict:
     return {"itdDate": local.strftime("%Y%m%d"), "itdTime": local.strftime("%H%M")}
 
 
+def find_place(name: str) -> dict | None:
+    """Any named place the timetable service knows, including shops and addresses."""
+    data = _get("XML_STOPFINDER_REQUEST", name_sf=name[:MAX_NAME_CHARS], type_sf="any", coordOutputFormat="WGS84[DD.DDDDD]")
+    places = [item for item in data.get("locations", []) if item.get("coord")]
+    return next((p for p in places if p.get("isBest")), places[0] if places else None)
+
+
 def parse_departures(data: dict, line: str | None = None, now: datetime | None = None) -> list[dict]:
     now = now or datetime.now(timezone.utc)
     departures = []

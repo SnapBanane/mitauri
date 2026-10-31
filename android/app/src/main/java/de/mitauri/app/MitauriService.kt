@@ -25,6 +25,7 @@ class MitauriService : Service() {
     override fun onCreate() {
         super.onCreate()
         Mitauri.init(this)
+        PlaceReminders.watchAll(this)
         val channel = NotificationChannel(CHANNEL, "Background connection", NotificationManager.IMPORTANCE_MIN)
         channel.setShowBadge(false)
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)

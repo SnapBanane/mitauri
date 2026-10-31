@@ -318,7 +318,7 @@ object Mitauri {
             when (data.getString("type")) {
                 "reply" -> main.post { onReply(data.getString("text")) }
                 "door_command" -> main.post { DoorOpener.command(app) }
-                "open_door", "read_notifications", "ask_to_reply" -> main.post { answerRequest(webSocket, data) }
+                "open_door", "read_notifications", "ask_to_reply", "add_place_reminder", "list_place_reminders", "remove_place_reminder" -> main.post { answerRequest(webSocket, data) }
                 "ring", "notify" -> {
                     // Tells the server it arrived, so it can fall back to Discord if it didn't.
                     webSocket.send(JSONObject().put("type", "ack").put("id", data.getString("id")).toString())
@@ -354,6 +354,12 @@ object Mitauri {
         val answer = when (data.getString("type")) {
             "open_door" -> JSONObject().put("result", Door.open(app))
             "read_notifications" -> NotificationAccess.read(app)
+            "add_place_reminder" -> JSONObject().put(
+                "result",
+                PlaceReminders.add(app, data.getString("text"), data.getDouble("latitude"), data.getDouble("longitude"), data.getDouble("radius").toFloat()),
+            )
+            "list_place_reminders" -> JSONObject().put("items", PlaceReminders.list(app))
+            "remove_place_reminder" -> JSONObject().put("removed", PlaceReminders.remove(app, data.getString("reminder")))
             else -> JSONObject().put("result", NotificationAccess.askToReply(app, data.getString("notification"), data.getString("text")))
         }
         webSocket.send(answer.put("type", "answer").put("id", data.getString("id")).toString())
