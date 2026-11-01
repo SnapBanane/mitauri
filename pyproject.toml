@@ -19,6 +19,7 @@ dependencies = [
     "google-auth-oauthlib>=1",
     "bleak>=3,<4",
     "onnx-asr[cpu,hub]>=0.12,<0.13",
+    "httpx>=0.27,<1",
 ]
 
 [project.scripts]

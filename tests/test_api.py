@@ -2,12 +2,14 @@ import asyncio
 import base64
 import hashlib
 import json
+import os
 import secrets
 import socket
 import sys
 import time
 from pathlib import Path
 
+import httpx
 import numpy as np
 import pytest
 from aiohttp import ClientSession
@@ -808,3 +810,68 @@ def test_a_second_copy_notices_the_port_is_taken():
         port = server.getsockname()[1]
         assert port_in_use(port)
     assert not port_in_use(port)
+
+
+def groq_speech(tmp_path, monkeypatch, handler):
+    monkeypatch.setenv("MITAURI_GROQ_API_KEY", "key-value")
+    monkeypatch.delenv("MITAURI_SPEECH_ENGINE", raising=False)
+    monkeypatch.setattr("mitauri.speech.only_speech", lambda audio: audio)
+    speech = Speech(tmp_path)
+    speech._groq_client = httpx.Client(transport=httpx.MockTransport(handler))
+    return speech
+
+
+def test_groq_hears_and_its_key_leaves_the_environment(tmp_path, monkeypatch):
+    seen = {}
+
+    def handler(request):
+        seen["auth"], seen["body"] = request.headers["authorization"], request.content
+        return httpx.Response(200, json={"text": " hallo "})
+
+    speech = groq_speech(tmp_path, monkeypatch, handler)
+    assert "MITAURI_GROQ_API_KEY" not in os.environ
+    assert speech.transcribe(b"\0\0" * 100) == ("hallo", "de")
+    assert seen["auth"] == "Bearer key-value"
+    assert b'name="language"' in seen["body"] and b"RIFF" in seen["body"]
+
+
+def test_silence_never_goes_to_groq(tmp_path, monkeypatch):
+    def handler(request):
+        raise AssertionError("nothing should be sent")
+
+    speech = groq_speech(tmp_path, monkeypatch, handler)
+    monkeypatch.setattr("mitauri.speech.only_speech", lambda audio: audio[:0])
+    assert speech.transcribe(b"\0\0" * 100)[0] == ""
+
+
+@pytest.mark.parametrize("failure", [
+    lambda request: httpx.Response(429, json={"error": "secret words"}),
+    lambda request: httpx.Response(200, text="not json"),
+    lambda request: (_ for _ in ()).throw(httpx.ConnectTimeout("slow")),
+])
+def test_local_recognition_takes_over_when_groq_fails_then_groq_rests(tmp_path, monkeypatch, caplog, failure):
+    class Segment:
+        text = "lokal"
+
+    class Whisper:
+        def transcribe(self, audio, **_):
+            return [Segment()], None
+
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return failure(request)
+
+    speech = groq_speech(tmp_path, monkeypatch, handler)
+    speech._whisper = Whisper()
+    assert speech.transcribe(b"\0\0" * 100)[0] == "lokal"
+    assert speech.transcribe(b"\0\0" * 100)[0] == "lokal"
+    assert len(calls) == 1
+    assert "key-value" not in caplog.text and "secret words" not in caplog.text
+
+
+def test_naming_a_local_engine_means_groq_gets_nothing(tmp_path, monkeypatch):
+    monkeypatch.setenv("MITAURI_GROQ_API_KEY", "key-value")
+    monkeypatch.setenv("MITAURI_SPEECH_ENGINE", "whisper")
+    assert Speech(tmp_path)._groq_key == ""

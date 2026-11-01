@@ -19,7 +19,7 @@ from .memory import Memory
 from .presence import Presence, load_key
 from .reminders import Reminders
 from .chat_memory import MODEL as SEARCH_MODEL
-from .speech import VOICES, WHISPER_THREADS, Speech
+from .speech import GROQ_MODEL, VOICES, WHISPER_THREADS, Speech, speech_engine
 
 log = logging.getLogger(__name__)
 
@@ -235,8 +235,10 @@ def startup_summary(config, whisper_model: str, whisper_threads: int) -> str:
     language = os.environ.get("MITAURI_SPEECH_LANGUAGE", "de")
     wake_settings = wake.load_settings(config.data_dir)
     whisper = f"Whisper {whisper_model}, {whisper_threads} threads"
-    parakeet = os.environ.get("MITAURI_SPEECH_ENGINE", "parakeet") == "parakeet"
-    hearing = f"Parakeet, and {whisper} for short clips" if parakeet else whisper
+    hearing = {
+        "groq": f"Groq {GROQ_MODEL}, sends recordings to Groq, and {whisper} if it fails",
+        "parakeet": f"Parakeet, and {whisper} for short clips",
+    }.get(speech_engine(), whisper)
     lines = [
         "Mitauri is starting",
         f"  Chat model:      {config.model}",

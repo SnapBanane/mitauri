@@ -1,6 +1,10 @@
-"""Speech recognition and voices, running locally so they stay free and private.
+"""Speech recognition and voices. The voices always run locally.
 
-Parakeet hears by default: on this laptop it takes about 0.3 s where Whisper small takes 1.4 s, however
+With MITAURI_GROQ_API_KEY set, Groq hears instead, which means recordings leave this machine. Only the part of a
+clip with speech in it is sent. Local recognition takes over whenever Groq fails, and stays unloaded until then to
+free its memory for the voices.
+
+Without a key, Parakeet hears by default: on this laptop it takes about 0.3 s where Whisper small takes 1.4 s, however
 short the clip, because Whisper always processes a full 30 s window. Set MITAURI_SPEECH_ENGINE=whisper to
 go back, and Whisper also takes over if Parakeet can't load. Whisper still hears very short clips: Parakeet
 guesses the language by itself, so on one or two words it turned "Wecker aus" into "Becca aus" and "Ja" into
@@ -11,10 +15,12 @@ import io
 import logging
 import os
 import threading
+import time
 import urllib.request
 import wave
 from pathlib import Path
 
+import httpx
 import numpy as np
 
 VOICE_ROOT = "https://huggingface.co/rhasspy/piper-voices/resolve/main"
@@ -24,11 +30,31 @@ VOICES = {
 }
 SAMPLE_RATE = 16_000
 CONFIDENT_LANGUAGE = 0.8
+GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+GROQ_MODEL = "whisper-large-v3"
+GROQ_TIMEOUT_SECONDS = 3.0
+GROQ_REST_SECONDS = 60  # after a failure, so an outage doesn't add the timeout to every request
 PARAKEET_MODEL = "nemo-parakeet-tdt-0.6b-v3"
 SHORT_CLIP_SECONDS = 2.0  # counts the bit of silence the filter keeps around the words
 WHISPER_THREADS = int(os.environ.get("MITAURI_WHISPER_THREADS", min(8, os.cpu_count() or 4)))
 
 log = logging.getLogger(__name__)
+
+
+def speech_engine() -> str:
+    """Which engine hears: the one named in the settings, or Groq if there's a key, or Parakeet."""
+    chosen = os.environ.get("MITAURI_SPEECH_ENGINE")
+    return chosen or ("groq" if os.environ.get("MITAURI_GROQ_API_KEY") else "parakeet")
+
+
+def wav_bytes(audio: np.ndarray) -> bytes:
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(SAMPLE_RATE)
+        output.writeframes((audio * 32767).astype(np.int16).tobytes())
+    return buffer.getvalue()
 
 
 def choose_language(language: str, confidence: float, scores: dict[str, float]) -> str:
@@ -52,7 +78,13 @@ class Speech:
         self._hearing = threading.Lock()
         self._speaking = threading.Lock()
         self._parakeet = None
-        self._parakeet_failed = os.environ.get("MITAURI_SPEECH_ENGINE", "parakeet") != "parakeet"
+        engine = self._engine = speech_engine()
+        self._parakeet_failed = engine != "parakeet"
+        # Taken out of the environment, so Claude and the tools it starts never inherit the key.
+        key = os.environ.pop("MITAURI_GROQ_API_KEY", "")
+        self._groq_key = key if engine == "groq" else ""
+        self._groq_client = httpx.Client(timeout=GROQ_TIMEOUT_SECONDS)
+        self._groq_rests_until = 0.0
         self._whisper = None
         self._detector = None
         self._voices = {}
@@ -67,14 +99,15 @@ class Speech:
             with self._hearing:
                 silence = np.zeros(SAMPLE_RATE, dtype=np.float32)
                 only_speech(silence)
-                if parakeet := self._load_parakeet():
-                    parakeet.recognize(silence, sample_rate=SAMPLE_RATE)
-                list(self._load_whisper().transcribe(silence, language="de", beam_size=1)[0])
+                if not self._groq_key:
+                    if parakeet := self._load_parakeet():
+                        parakeet.recognize(silence, sample_rate=SAMPLE_RATE)
+                    list(self._load_whisper().transcribe(silence, language="de", beam_size=1)[0])
                 if os.environ.get("MITAURI_SPEECH_LANGUAGE") == "auto":
                     self._load_detector()
             for language in VOICES:
                 self.synthesize("Hallo.", language)
-            log.info("Speech models ready: %s and %s", "Parakeet with Whisper" if self._load_parakeet() else "Whisper", ", ".join(name for _, name in VOICES.values()))
+            log.info("Speech models ready: %s and %s", self._engine.capitalize(), ", ".join(name for _, name in VOICES.values()))
         except Exception:
             log.exception("Couldn't load the speech models; will retry on first use")
 
@@ -87,7 +120,34 @@ class Speech:
                 language = self._detect_language(audio)
             return self._recognise(audio, language), language
 
+    def _ask_groq(self, speech: np.ndarray, language: str) -> str | None:
+        """Returns the text, or None if local recognition has to do it."""
+        if time.monotonic() < self._groq_rests_until:
+            return None
+        try:
+            response = self._groq_client.post(
+                GROQ_URL,
+                headers={"Authorization": f"Bearer {self._groq_key}"},
+                files={"file": ("speech.wav", wav_bytes(speech), "audio/wav")},
+                data={"model": GROQ_MODEL, "language": language, "response_format": "json", "temperature": "0"},
+            )
+            response.raise_for_status()
+            return response.json()["text"].strip()
+        except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as error:
+            self._groq_rests_until = time.monotonic() + GROQ_REST_SECONDS
+            # Only the kind of failure, as an error's text could carry what was said.
+            status = error.response.status_code if isinstance(error, httpx.HTTPStatusError) else type(error).__name__
+            log.warning("Groq failed (%s), so this machine hears for the next %s s", status, GROQ_REST_SECONDS)
+            return None
+
     def _recognise(self, audio: np.ndarray, language: str = "de") -> str:
+        if self._groq_key:
+            speech = only_speech(audio)
+            if not speech.size:
+                return ""
+            text = self._ask_groq(speech, language)
+            if text is not None:
+                return text
         parakeet = self._load_parakeet()
         if parakeet is not None:
             speech = only_speech(audio)
