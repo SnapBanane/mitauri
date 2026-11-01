@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import secrets
+import socket
 import sys
 import time
 from pathlib import Path
@@ -797,3 +798,13 @@ def test_update_notice_needs_the_internal_token(tmp_path):
         told = await session.post(f"{BASE}/app-update-notice", headers={"Authorization": "Bearer secret"})
         assert await told.json() == {"told_phone": False}
     with_api(test, tmp_path)
+
+
+def test_a_second_copy_notices_the_port_is_taken():
+    from mitauri.__main__ import port_in_use
+    with socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen()
+        port = server.getsockname()[1]
+        assert port_in_use(port)
+    assert not port_in_use(port)

@@ -1,11 +1,12 @@
 import argparse
 import asyncio
-import errno
 import json
 import logging
 import os
+import socket
 import sys
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from . import modules, proposals, wake
@@ -115,6 +116,8 @@ def main() -> None:
             with urlopen(notice, timeout=5) as response:
                 told = json.load(response)["told_phone"]
             print("The phone is fetching it now." if told else "The phone isn't connected, so it'll fetch it when it reconnects.")
+        except HTTPError:
+            print("The server refused the notice, so the phone will fetch it when it next reconnects.")
         except OSError:
             print("The server isn't running, so the phone will fetch it once it is.")
         return
@@ -153,6 +156,9 @@ def main() -> None:
     logging.getLogger("discord.client").setLevel(logging.ERROR)
     logging.getLogger("discord.state").setLevel(logging.ERROR)
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    # Checked before anything else, because a second copy would replace the running one's internal token.
+    if port_in_use(API_PORT):
+        raise SystemExit(f"Mitauri is already running: port {API_PORT} is in use. Stop the other copy first.")
     log.info(startup_summary(config, os.environ.get("MITAURI_WHISPER_MODEL", "small"), WHISPER_THREADS))
     speech = Speech(config.data_dir)
     speech.preload()
@@ -169,10 +175,6 @@ def main() -> None:
         asyncio.run(serve(bot, token, api, brain))
     except KeyboardInterrupt:
         pass
-    except OSError as error:
-        if error.errno != errno.EADDRINUSE:
-            raise
-        raise SystemExit(f"Mitauri is already running: port {API_PORT} is in use. Stop the other copy first.") from None
 
 
 def alarm_notice(data_dir, over: bool, text: str = "") -> bool:
@@ -218,6 +220,12 @@ def review_proposal(action: str, proposal_id: str | None) -> None:
         for name in applied:
             print("changed", name)
         print("Run the tests, then restart Mitauri.")
+
+
+def port_in_use(port: int) -> bool:
+    with socket.socket() as probe:
+        probe.settimeout(1)
+        return probe.connect_ex(("127.0.0.1", port)) == 0
 
 
 def startup_summary(config, whisper_model: str, whisper_threads: int) -> str:
