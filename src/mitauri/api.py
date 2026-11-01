@@ -184,6 +184,7 @@ class Api:
         app.router.add_post("/watch", self._on_watch)
         app.router.add_get("/presence", self._on_presence)
         app.router.add_get("/presence-key", self._on_presence_key)
+        app.router.add_post("/presence-report", self._on_presence_report)
         app.router.add_post("/photo", self._on_photo)
         app.router.add_post("/voice", self._on_voice)
         app.router.add_post("/voice-prepare", self._on_voice_prepare)
@@ -705,6 +706,16 @@ class Api:
     async def _on_presence_key(self, request: web.Request) -> web.Response:
         record(self._data_dir, "presence_key_sent", device=request[DEVICE])
         return web.json_response({"key": load_key(self._data_dir).hex()})
+
+    async def _on_presence_report(self, request: web.Request) -> web.Response:
+        # Never logged or saved, so no location history builds up.
+        if self._presence is None:
+            return web.json_response({"ok": True})
+        try:
+            self._presence.handle_report("phone", json.loads(await request.read()))
+        except ValueError:
+            raise web.HTTPBadRequest()
+        return web.json_response({"ok": True})
 
     async def _on_place_reminder(self, request: web.Request) -> web.Response:
         try:

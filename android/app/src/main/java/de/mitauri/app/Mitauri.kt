@@ -449,6 +449,21 @@ object Mitauri {
         }
     }
 
+    fun sendPresenceReport(listening: Boolean, heard: Map<String, Int>) {
+        if (status != Status.CONNECTED) return
+        val sightings = JSONArray()
+        heard.forEach { (payload, rssi) -> sightings.put(JSONObject().put("p", payload).put("r", rssi)) }
+        val body = JSONObject().put("listening", listening).put("sightings", sightings).toString().toByteArray()
+        val request = signedRequest("presence-report", "POST", body).build()
+        Thread {
+            try {
+                client.newCall(request).execute().close()
+            } catch (_: IOException) {
+                // The next report follows in a minute.
+            }
+        }.start()
+    }
+
     private fun fetchPresenceKey() {
         val request = signedRequest("presence-key", "GET", ByteArray(0)).build()
         Thread {

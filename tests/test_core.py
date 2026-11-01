@@ -4,6 +4,7 @@ import importlib.util
 import wave as wave_module
 import io
 import json
+import struct
 import os
 import stat
 import subprocess
@@ -830,6 +831,45 @@ def test_presence_reads_sensor_names_and_ignores_broken_entries():
     assert presence_module.parse_sensors("") == {}
     assert presence_module.parse_sensors(" desk=/dev/a , home=/dev/b,nonsense,=/dev/c,x=") == {
         "desk": "/dev/a", "home": "/dev/b"}
+
+
+def signed_beacon(name, counter):
+    key = presence_module.beacon_key(KEY, name)
+    return (b"MS" + struct.pack(">I", counter) + presence_module.beacon_signature(key, counter)).hex()
+
+
+def heard(sensor, payload, now, rssi=-50):
+    sensor.handle_report("phone", {"listening": True, "sightings": [{"p": payload, "r": rssi}]}, now)
+    return sensor.status(now)["sensors"]["desk"]["phone"]["state"]
+
+
+def test_sensor_beacon_is_only_believed_when_signed_and_new():
+    sensor = presence_module.Presence(KEY, ["desk"])
+    assert heard(sensor, signed_beacon("other", 5), NOW) == "away"
+    assert heard(sensor, "4d53" + "00" * 12, NOW) == "away"
+    assert heard(sensor, signed_beacon("desk", 5), NOW) == "near"
+    gone = NOW + presence_module.AWAY_AFTER_SECONDS + 1
+    assert heard(sensor, signed_beacon("desk", 4), gone) == "away"  # an older recording
+    assert heard(sensor, signed_beacon("desk", 5), gone + presence_module.BEACON_COUNTER_STALE_SECONDS) == "away"
+    assert heard(sensor, signed_beacon("desk", 6), gone + 200) == "near"
+
+
+def test_sensor_beacon_says_unknown_when_the_phone_cannot_tell():
+    sensor = presence_module.Presence(KEY, ["desk"])
+    state = lambda now: sensor.status(now)["sensors"]["desk"]["phone"]["state"]
+    assert state(NOW) == "unknown"
+    sensor.handle_report("phone", {"listening": False, "sightings": []}, NOW)
+    assert state(NOW) == "unknown"
+    sensor.handle_report("phone", {"listening": True, "sightings": []}, NOW)
+    assert state(NOW) == "away"
+    assert state(NOW + presence_module.REPORTER_SILENT_AFTER_SECONDS + 1) == "unknown"
+
+
+def test_sensor_reports_survive_garbage():
+    sensor = presence_module.Presence(KEY, ["desk"])
+    for garbage in (None, [], "x", {"sightings": 3}, {"listening": True, "sightings": [1, {"p": "zz", "r": 1}, {"p": 3}]}):
+        sensor.handle_report("phone", garbage, NOW)
+    assert sensor.status(NOW)["sensors"]["desk"]["phone"]["state"] == "away"
 
 
 def test_beacon_payload_is_what_the_sensor_expects():

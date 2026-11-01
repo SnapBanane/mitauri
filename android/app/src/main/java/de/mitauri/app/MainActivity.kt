@@ -106,6 +106,7 @@ class MainActivity : FragmentActivity() {
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
             refresh++
             PresenceBeacon.start(this)
+            SensorListener.start(this)
             WatchLink.start(this)
         }
     private var refresh by mutableIntStateOf(0)
@@ -283,10 +284,10 @@ class MainActivity : FragmentActivity() {
                 openSettings(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
             },
             SetupItem(
-                "Presence beacon", "Lets your Bluetooth sensor notice you nearby",
-                PresenceBeacon.canRun(this), required = false,
+                "Presence beacon", "Lets your Bluetooth sensors notice you nearby",
+                PresenceBeacon.canRun(this) && SensorListener.canRun(this), required = false,
             ) {
-                askPermissions.launch(arrayOf(Manifest.permission.BLUETOOTH_ADVERTISE))
+                askPermissions.launch(arrayOf(Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_SCAN))
             },
             SetupItem("Autostart", "On Xiaomi: turn on Autostart for Mitauri", null, action = ::openAutostart),
             SetupItem("Notifications", "For calls and reminders", notifications) {

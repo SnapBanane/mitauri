@@ -31,6 +31,11 @@ DEVICES = ("phone", "laptop")
 DEFAULT_SENSOR = "home"
 COMPANY_ID = 0xFFFF
 MAGIC = b"MT"
+BEACON_MAGIC = b"MS"
+BEACON_PAYLOAD_BYTES = 14  # magic, 4-byte counter, 8-byte signature
+BEACON_COUNTER_STALE_SECONDS = 180  # a sensor moves its counter on every minute, so older is a replay
+REPORTER_SILENT_AFTER_SECONDS = 300
+MAX_REPORT_SIGHTINGS = 16
 
 log = logging.getLogger(__name__)
 
@@ -65,13 +70,29 @@ def parse_sensors(text: str) -> dict[str, str]:
     return {name.strip(): port.strip() for name, port in pairs if name.strip() and port.strip()}
 
 
+def beacon_key(key: bytes, name: str) -> bytes:
+    """The key held by a sensor that broadcasts, so a stolen sensor can only fake itself."""
+    return device_key(key, "beacon:" + name)
+
+
+def beacon_signature(key: bytes, counter: int) -> bytes:
+    return hmac.new(key, struct.pack(">I", counter), hashlib.sha256).digest()[:TOKEN_BYTES]
+
+
+def parse_beacons(text: str) -> list[str]:
+    return [name.strip() for name in text.split(",") if name.strip()]
+
+
 def distance_metres(rssi: float) -> float:
     return 10 ** ((RSSI_AT_ONE_METRE - rssi) / (10 * PATH_LOSS))
 
 
 class Presence:
-    def __init__(self, key: bytes):
+    def __init__(self, key: bytes, beacons: tuple[str, ...] | list[str] = ()):
         self._keys = {device: device_key(key, device) for device in DEVICES}
+        self._beacon_keys = {name: beacon_key(key, name) for name in beacons}
+        self._beacon_counters: dict[str, tuple[int, float]] = {}  # newest counter, and when it first appeared
+        self._reporters: dict[str, tuple[float, bool]] = {}  # when each listener last reported, and if it can hear
         self._heartbeats: dict[str, float] = {}
         self._sightings: dict[tuple[str, str], tuple[float, float]] = {}  # rssi and when, by sensor and device
 
@@ -99,9 +120,53 @@ class Presence:
         device = self._device_for(token, now)
         if rssi >= MAX_VALID_RSSI or device is None:
             return
+        self._record(sensor, device, rssi, now)
+
+    def _beacon_for(self, payload: bytes, now: float) -> str | None:
+        if len(payload) != BEACON_PAYLOAD_BYTES or payload[:2] != BEACON_MAGIC:
+            return None
+        counter = struct.unpack(">I", payload[2:6])[0]
+        for name, key in self._beacon_keys.items():
+            if not hmac.compare_digest(beacon_signature(key, counter), payload[6:]):
+                continue
+            newest, since = self._beacon_counters.get(name, (-1, now))
+            if counter > newest:
+                self._beacon_counters[name] = (counter, now)
+                return name
+            return name if counter == newest and now - since <= BEACON_COUNTER_STALE_SECONDS else None
+        return None
+
+    def handle_report(self, listener: str, report: object, now: float | None = None) -> None:
+        """Takes a listener's report of the sensors it hears. Its contents aren't trusted to be well formed."""
+        now = time.time() if now is None else now
+        if not isinstance(report, dict):
+            return
+        self._reporters[listener] = (now, report.get("listening") is True)
+        sightings = report.get("sightings")
+        if not isinstance(sightings, list):
+            return
+        for sighting in sightings[:MAX_REPORT_SIGHTINGS]:
+            try:
+                payload, rssi = bytes.fromhex(str(sighting["p"])), int(sighting["r"])
+            except (ValueError, KeyError, TypeError):
+                continue
+            name = self._beacon_for(payload, now)
+            if name is None or rssi >= MAX_VALID_RSSI:
+                continue
+            self._record(name, listener, rssi, now)
+
+    def _record(self, sensor: str, device: str, rssi: float, now: float) -> None:
         previous = self._sightings.get((sensor, device))
         fresh = previous is None or now - previous[1] > AWAY_AFTER_SECONDS
         self._sightings[sensor, device] = (rssi if fresh else SMOOTHING * rssi + (1 - SMOOTHING) * previous[0], now)
+
+    def _beacon_status(self, name: str, listener: str, now: float) -> dict:
+        reported, listening = self._reporters.get(listener, (0.0, False))
+        if now - reported > REPORTER_SILENT_AFTER_SECONDS:
+            return {"state": "unknown", "reason": "The phone hasn't reported lately."}
+        if not listening:
+            return {"state": "unknown", "reason": "The phone can't listen: Bluetooth is off or not allowed."}
+        return self._device_status(name, listener, now)
 
     def _device_status(self, sensor: str, device: str, now: float) -> dict:
         sighting = self._sightings.get((sensor, device))
@@ -119,6 +184,8 @@ class Presence:
                 sensors[sensor] = {"state": "unknown", "reason": "This sensor isn't reporting."}
             else:
                 sensors[sensor] = {device: self._device_status(sensor, device, now) for device in DEVICES}
+        for name in self._beacon_keys:
+            sensors[name] = {"phone": self._beacon_status(name, "phone", now)}
         return {"sensors": sensors}
 
     def watch_serial(self, port: str, sensor: str = DEFAULT_SENSOR) -> None:

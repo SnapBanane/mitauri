@@ -212,6 +212,12 @@ ESP32-S3 board.
 Name the sensors in `MITAURI_PRESENCE_SENSORS`, as `.env.example` shows. A sensor only reports while it's plugged
 into the machine running Mitauri, so a sensor that's unplugged shows as unknown rather than away.
 
+A sensor can also sit on plain USB power, with no network. It broadcasts a signed beacon, the phone listens for it
+and tells the server, and the server checks the signature. To set one up, flash it, keep it on USB, run
+`uv run mitauri presence-key desk`, and add the name to `MITAURI_PRESENCE_BEACONS`. The key lives on the sensor and
+is derived from your main key, so a stolen sensor can only fake itself. Someone close by could still relay its signal
+live, so never use presence as proof for anything that matters. The phone reports once a minute and nothing is saved.
+
 ## Watch
 
 The phone talks to an ACT307 (VeryFitPro / iDO) watch directly over Bluetooth, so VeryFitPro isn't needed: uninstall

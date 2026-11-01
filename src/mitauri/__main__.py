@@ -5,6 +5,7 @@ import logging
 import os
 import socket
 import sys
+import time
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -17,7 +18,7 @@ from .brain import Brain, BrainError, prune_transcripts
 from .config import API_PORT, load_config, new_token
 from .memory import Memory
 from .laptop_beacon import start_laptop_beacon
-from .presence import DEFAULT_SENSOR, Presence, load_key, parse_sensors
+from .presence import DEFAULT_SENSOR, Presence, beacon_key, load_key, parse_beacons, parse_sensors
 from .reminders import Reminders
 from .chat_memory import MODEL as SEARCH_MODEL
 from .speech import GROQ_MODEL, VOICES, WHISPER_THREADS, Speech, speech_engine
@@ -38,6 +39,9 @@ def main() -> None:
     module_command.add_argument("name", nargs="?")
     publish_update = commands.add_parser("publish-update", help="offer the newest app build to the phone")
     publish_update.add_argument("folder", nargs="?", help="folder with the APK and output-metadata.json, if not this repo's build")
+    sensor_key = commands.add_parser("presence-key", help="give a sensor on USB its key, so it can broadcast")
+    sensor_key.add_argument("name")
+    sensor_key.add_argument("--port", default="/dev/ttyACM0")
     commands.add_parser("wake-test", help="play a test alarm on the speaker, once")
     commands.add_parser("wake-stop", help="stop an alarm that's playing")
     proposal = commands.add_parser("proposal", help="review changes Mitauri has suggested to itself")
@@ -82,6 +86,22 @@ def main() -> None:
             print("on " if item["enabled"] else "off", item["name"].ljust(14), item["description"])
         return
 
+    if args.command == "presence-key":
+        import serial
+        data_dir = load_config().data_dir
+        connection = serial.Serial()
+        connection.port, connection.baudrate, connection.timeout = args.port, 115200, 2
+        connection.dtr = connection.rts = False
+        connection.open()
+        time.sleep(3)  # opening the port can restart the board, and it would miss the key while booting
+        connection.reset_input_buffer()
+        connection.write(f"KEY {beacon_key(load_key(data_dir), args.name).hex()}\n".encode())
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if b'"key":"saved"' in connection.readline():
+                print(f"{args.name} now broadcasts. Add it to MITAURI_PRESENCE_BEACONS and restart Mitauri.")
+                return
+        raise SystemExit("The sensor didn't confirm the key. Is its firmware current, and is the port free?")
     if args.command == "wake-test":
         # Only here, in a terminal: it's loud, and it may be in a bedroom.
         settings = wake.load_settings(config.data_dir)
@@ -166,7 +186,7 @@ def main() -> None:
     new_token(config.data_dir)
     session = (config.data_dir / "session.txt")
     prune_transcripts(config.data_dir, {session.read_text()} if session.exists() else set())
-    presence = Presence(load_key(config.data_dir))
+    presence = Presence(load_key(config.data_dir), parse_beacons(os.environ.get("MITAURI_PRESENCE_BEACONS", "")))
     if modules.is_enabled(config.data_dir, "presence"):
         sensors = parse_sensors(os.environ.get("MITAURI_PRESENCE_SENSORS", ""))
         for name, port in (sensors or {DEFAULT_SENSOR: os.environ.get("MITAURI_PRESENCE_PORT", "/dev/ttyUSB0")}).items():

@@ -392,6 +392,13 @@ def test_presence_status_is_internal_and_key_needs_a_paired_device(tmp_path):
     assert key not in (tmp_path / "audit.log").read_text()
 
 
+def test_presence_report_needs_a_paired_device(tmp_path):
+    async def test(session):
+        assert (await session.post(f"{BASE}/presence-report", data=b"{}")).status == 401
+        assert (await session.post(f"{BASE}/presence-report", data=b"{}", headers=INTERNAL)).status == 401
+    with_api(test, tmp_path)
+
+
 def test_stop_only_means_the_alarm_while_it_is_ringing(tmp_path):
     async def test(session):
         async with connect(session) as socket:
