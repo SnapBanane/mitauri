@@ -6,17 +6,21 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import re
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from aiohttp import WSMsgType, web
 
-from . import app_update, modules, style, wake
+from . import app_update, instant, modules, style, wake
 from .audit import record
 from .auth import Devices, FailureLimiter
 from .brain import BrainError
 from .presence import load_key
+from .reminders import Reminders
 from .style import StyleLearner
 from .config import API_PORT, LOCATION_TIMEOUT_SECONDS, load_token  # noqa: F401
 
@@ -42,6 +46,8 @@ GOING_AHEAD = {"ja", "jo", "jap", "ja bitte", "yes", "yep", "ok", "okay", "mach"
 MAX_SPEECH_CHARS = 2_000
 PREPARED_MAX_TAIL_BYTES = 32_000  # 1 s of audio: what the phone may record after preparing, all of it quiet
 PREPARED_MAX_AGE_SECONDS = 30
+MAX_INSTANT_NOTES = 10
+MAX_PENDING_REMINDERS = 100
 MAX_PREPARES_PER_MINUTE = 8  # each one can reach Groq, which allows 20 requests a minute
 LOOPBACK = ("127.0.0.1", "::1")
 DEVICE = web.RequestKey("device", str)
@@ -150,6 +156,7 @@ class Api:
         self._may_send_once = False
         self._watch_sends: list[float] = []
         self._learning = False
+        self._instant_notes: list[str] = []
         self._prepared: tuple[bytes, int, float, asyncio.Task] | None = None
         self._prepare_times: list[float] = []
         self._turn = asyncio.Lock()  # one conversation turn at a time, so a send permission can't reach another turn
@@ -342,11 +349,15 @@ class Api:
                 await socket.send_json({"type": "reply", "id": message_id, "text": "Einen Moment, die Tür."})
             return
         self._keep_style_lines(style.MITAURI, [text])
+        if answer := await self._instant_reply(text):
+            if not socket.closed:
+                await socket.send_json({"type": "reply", "id": message_id, "text": answer[0]})
+            return
         async with self._turn:
             # Decided from the typed words, which outside text can't change. It's good for one send, for this message.
             self._may_send_once = asks_to_send(text)
             try:
-                reply = await self._brain.ask(text)
+                reply = await self._brain.ask(self._with_instant_notes(text))
                 self._remember(text, reply)
             except BrainError as error:
                 reply = f"Something went wrong: {error}"
@@ -440,6 +451,63 @@ class Api:
         await phone.send_json({"type": "update_available"})
         return web.json_response({"told_phone": True})
 
+    async def _instant_reply(self, text: str) -> tuple[str, str] | None:
+        """Answers without Claude if it can, as (reply, language). None means Claude handles it, also after a failure."""
+        request = instant.parse(text)
+        if request is None:
+            return None
+        german = request.language == "de"
+        if request.kind in ("time", "date"):
+            now = datetime.now(ZoneInfo(os.environ.get("MITAURI_TIMEZONE", "Europe/Berlin")))
+            reply = instant.clock_reply(request.kind, request.language, now)
+        elif request.kind == "thanks":
+            reply = "Gerne." if german else "You're welcome."
+        else:
+            reply = await asyncio.to_thread(self._do_instant, request)
+            if reply is None:
+                return None
+        # Claude didn't see this exchange, so it hears about it with the next message.
+        self._instant_notes = [*self._instant_notes, f"{text} -> {reply}"][-MAX_INSTANT_NOTES:]
+        self._remember(text, reply)
+        return reply, request.language
+
+    def _do_instant(self, request: instant.Instant) -> str | None:
+        german = request.language == "de"
+        length = instant.duration_words(request.seconds, request.language)
+        try:
+            if request.kind == "reminder":
+                reminders = Reminders(self._data_dir / "reminders.db")
+                if len(reminders.pending()) >= MAX_PENDING_REMINDERS:
+                    return None
+                reminders.add(request.text, datetime.now(timezone.utc) + timedelta(seconds=request.seconds))
+                return f"Alles klar, in {length}." if german else f"Okay, in {length}."
+            if not modules.is_enabled(self._data_dir, "island"):
+                return None
+            from .modules import island
+            if request.kind == "timer_off":
+                answer = island.clear_countdown()
+                return None if "error" in answer else ("Timer aus." if german else "Timer off.")
+            answer = island.start_countdown("Timer", request.seconds / 60)
+            return None if "error" in answer else (f"Timer läuft, {length}." if german else f"Timer set, {length}.")
+        except Exception:
+            log.exception("An instant request failed, so Claude takes it")
+            return None
+
+    def _with_instant_notes(self, text: str) -> str:
+        notes, self._instant_notes = self._instant_notes, []
+        if not notes:
+            return text
+        return "[Answered directly before this message, for context only:\n" + "\n".join(notes) + "]\n" + text
+
+    async def _voice_event(self, phrase: str, language: str) -> dict:
+        event = {"sentence": phrase}
+        try:
+            audio = await asyncio.to_thread(self._speech.synthesize, phrase, language)
+            event["audio"] = base64.b64encode(audio).decode()
+        except Exception:
+            log.exception("Couldn't make the voice, so the phone will ask for it")  # it uses /speak then
+        return event
+
     async def _on_voice_prepare(self, request: web.Request) -> web.Response:
         """Starts hearing during the pause at the end of a sentence. Only /voice ever acts on the result."""
         pcm = await request.read()
@@ -487,6 +555,10 @@ class Api:
         elif is_door_command(transcript) and modules.is_enabled(self._data_dir, "door"):
             record(self._data_dir, "door_command", via="voice")
             await phone.send({"door": True})
+        elif transcript and (answer := await self._instant_reply(transcript)):
+            reply = answer[0]
+            await phone.send(await self._voice_event(*answer))
+            log.info("Voice timing: heard in %.2f s, answered instantly at %.2f s", heard, time.monotonic() - started)
         elif transcript:
             splitter = SentenceSplitter()
             phrases: asyncio.Queue[str | None] = asyncio.Queue()
@@ -497,7 +569,7 @@ class Api:
             async with self._turn:
                 try:
                     # Runs to the end even if the phone hangs up, so the conversation stays consistent.
-                    async for piece in self._brain.stream(transcript, spoken=True):
+                    async for piece in self._brain.stream(self._with_instant_notes(transcript), spoken=True):
                         if first_words is None and piece.strip():
                             first_words = time.monotonic() - started
                         reply += piece
@@ -520,14 +592,8 @@ class Api:
 
     async def _send_voices(self, phone: _PhoneStream, phrases: asyncio.Queue, language: str) -> None:
         while (phrase := await phrases.get()) is not None:
-            event = {"sentence": phrase}
             if phone.is_open:
-                try:
-                    audio = await asyncio.to_thread(self._speech.synthesize, phrase, language)
-                    event["audio"] = base64.b64encode(audio).decode()
-                except Exception:
-                    log.exception("Couldn't make the voice, so the phone will ask for it")  # it uses /speak then
-                await phone.send(event)
+                await phone.send(await self._voice_event(phrase, language))
 
     async def _on_speak(self, request: web.Request) -> web.Response:
         try:

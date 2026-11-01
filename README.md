@@ -251,6 +251,10 @@ enter the address and one-time code in the app. Finish the checklist on the app'
 - Encrypt the disk that holds the data folder, as nothing else protects it if the machine is stolen.
 - File permissions don't carry over to Windows. Restrict the data folder with `icacls` there.
 
+Everyday requests skip Claude and answer at once, by voice or typed: the time and date, "danke", starting or
+stopping a timer ("Stell einen Timer auf 5 Minuten"), and reminders ("Erinner mich in 10 Minuten an den Ofen"). Only
+a whole sentence counts, so anything else goes to Claude as usual.
+
 Voice mode records on the phone and sends the audio to your server. With `MITAURI_GROQ_API_KEY` in
 `secrets.env`, the server passes the spoken part to Groq for recognition, so Groq receives your voice; a failed
 request falls back to local Whisper. Without a key, nothing but text leaves your machines, and it uses Parakeet for recognition,

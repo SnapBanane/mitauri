@@ -7,6 +7,7 @@ import secrets
 import socket
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -17,7 +18,8 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from mitauri import api as api_module
-from mitauri import app_update
+from mitauri import app_update, instant, modules
+from mitauri.reminders import Reminders
 from mitauri import tools
 from mitauri.api import Api, SentenceSplitter, is_door_command, load_token
 from mitauri.auth import Devices, device_id, signed_message
@@ -1053,3 +1055,151 @@ def test_short_phrases_are_only_generated_once(tmp_path):
     for index in range(70):
         speech.synthesize(str(index), "de")
     assert len(speech._voice_cache) == 64
+
+
+@pytest.mark.parametrize("text, kind, seconds", [
+    ("Wie spät ist es?", "time", 0),
+    ("Hey Mitauri, wie viel Uhr ist es bitte?", "time", 0),
+    ("What time is it?", "time", 0),
+    ("Welcher Tag ist heute?", "date", 0),
+    ("Danke!", "thanks", 0),
+    ("Stell einen Timer auf 5 Minuten.", "timer", 300),
+    ("Stell mir mal einen Timer für fünf Minuten", "timer", 300),
+    ("Starte einen 10-Minuten-Timer", "timer", 600),
+    ("Timer 30 Sekunden", "timer", 30),
+    ("Timer eine Stunde", "timer", 3600),
+    ("Stell einen Timer auf eine halbe Stunde", "timer", 1800),
+    ("Set a timer for ten minutes", "timer", 600),
+    ("Timer aus", "timer_off", 0),
+    ("Lösch den Timer.", "timer_off", 0),
+    ("Erinner mich in 10 Minuten an den Ofen.", "reminder", 600),
+    ("Erinnere mich bitte in einer Stunde daran, den Müll rauszubringen", "reminder", 3600),
+    ("Remind me in five minutes to call Max", "reminder", 300),
+])
+def test_instant_requests_are_recognised(text, kind, seconds):
+    found = instant.parse(text)
+    assert found and found.kind == kind and found.seconds == seconds
+
+
+@pytest.mark.parametrize("text", [
+    "Wie spät ist es in Tokio?",
+    "Wie spät ist es und wie wird das Wetter?",
+    "Danke, aber was ist mit morgen?",
+    "Fünf Minuten",
+    "Wie lange läuft der Timer noch?",
+    "Stell den Timer auf später",
+    "Erinner mich morgen an den Zahnarzt",
+    "Erinner mich in 0 Minuten an den Ofen",
+    "Erinner mich in 9999 Stunden an den Ofen",
+    "Öffne die Tür",
+    "",
+])
+def test_everything_else_goes_to_claude(text):
+    assert instant.parse(text) is None
+
+
+def test_clock_replies_and_lengths():
+    now = datetime(2026, 11, 1, 18, 42)
+    assert instant.clock_reply("time", "de", now) == "Es ist 18 Uhr 42."
+    assert instant.clock_reply("time", "de", now.replace(minute=0)) == "Es ist 18 Uhr."
+    assert instant.clock_reply("date", "de", now) == "Heute ist Sonntag, der 1. November."
+    assert instant.duration_words(300, "de") == "5 Minuten"
+    assert instant.duration_words(3600, "de") == "eine Stunde"
+    assert instant.duration_words(90, "en") == "90 seconds"
+
+
+class SayingSpeech(FakeSpeech):
+    said = "Wie spät ist es?"
+
+    def transcribe(self, pcm):
+        return self.said, "de"
+
+
+class NoteBrain(CountingBrain):
+    def __init__(self):
+        super().__init__()
+        self.seen = []
+
+    async def stream(self, text, spoken=False):
+        self.asked += 1
+        self.seen.append(text)
+        yield "answer"
+
+
+def with_saying(test, tmp_path):
+    async def run():
+        devices = Devices(tmp_path)
+        assert devices.pair(devices.new_code(), PUBLIC_B64, "test")
+        speech, brain = SayingSpeech(), NoteBrain()
+        api = Api(brain, "secret", tmp_path, speech)
+        await api.start(["127.0.0.1"], PORT)
+        try:
+            async with ClientSession() as session:
+                async def say(text):
+                    speech.said = text
+                    response = await session.post(f"{BASE}/voice", data=b"a", headers=signed("POST", "/voice", b"a"))
+                    return [json.loads(line) for line in (await response.read()).splitlines()]
+                await test(say, brain, api)
+        finally:
+            await api.stop()
+    asyncio.run(run())
+
+
+def test_instant_answers_skip_claude_but_claude_hears_about_them_later(tmp_path):
+    async def test(say, brain, api):
+        events = await say("Wie spät ist es?")
+        assert brain.asked == 0
+        spoken = [e for e in events if "sentence" in e]
+        assert len(spoken) == 1 and spoken[0]["sentence"].startswith("Es ist") and spoken[0]["audio"]
+        assert events[-1]["reply"] == spoken[0]["sentence"]
+        await say("Und in Tokio?")
+        assert "Wie spät ist es?" in brain.seen[0] and brain.seen[0].endswith("Und in Tokio?")
+        await say("Und in Paris?")
+        assert brain.seen[1] == "Und in Paris?"
+    with_saying(test, tmp_path)
+
+
+def test_instant_reminder_is_saved_for_the_right_time(tmp_path):
+    async def test(say, brain, api):
+        events = await say("Erinner mich in 10 Minuten an den Ofen")
+        assert events[-1]["reply"] == "Alles klar, in 10 Minuten."
+        pending = Reminders(tmp_path / "reminders.db").pending()
+        assert len(pending) == 1 and pending[0][1] == "den Ofen"
+        assert brain.asked == 0
+    with_saying(test, tmp_path)
+
+
+def test_timer_uses_the_island_and_a_failure_goes_to_claude(tmp_path, monkeypatch):
+    from mitauri.modules import island
+    started = []
+    monkeypatch.setattr(island, "start_countdown", lambda title, minutes: started.append(minutes) or {"ok": True})
+
+    async def test(say, brain, api):
+        events = await say("Stell einen Timer auf 5 Minuten")
+        assert started == [5.0] and brain.asked == 0
+        assert events[-1]["reply"] == "Timer läuft, 5 Minuten."
+        monkeypatch.setattr(island, "start_countdown", lambda title, minutes: {"error": "phone gone"})
+        events = await say("Stell einen Timer auf 5 Minuten")
+        assert brain.asked == 1 and events[-1]["reply"] == "answer"
+    with_saying(test, tmp_path)
+
+
+def test_switching_off_the_island_sends_timers_to_claude(tmp_path):
+    modules.set_enabled(tmp_path, "island", False)
+
+    async def test(say, brain, api):
+        await say("Stell einen Timer auf 5 Minuten")
+        assert brain.asked == 1
+    with_saying(test, tmp_path)
+
+
+def test_door_phrases_are_never_instant_and_still_go_to_the_phone(tmp_path):
+    async def test(say, brain, api):
+        events = await say("Öffne die Tür")
+        assert {"door": True} in events and brain.asked == 0
+    with_saying(test, tmp_path)
+
+
+def test_tests_cannot_reach_the_real_data_folder():
+    from mitauri.config import data_dir
+    assert data_dir() != Path("~/.local/share/mitauri").expanduser()

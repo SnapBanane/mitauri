@@ -9,6 +9,7 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaPlayer
 import android.media.MediaRecorder
+import android.media.ToneGenerator
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -25,6 +26,8 @@ object VoiceMode {
     private const val FRAME_SAMPLES = 480 // 30 ms
     private const val END_SILENCE_FRAMES = 20 // 0.6 s
     private const val PREPARE_SILENCE_FRAMES = 8 // 0.24 s: the rest of the wait hides the time hearing takes
+    private const val HEARD_YOU_VOLUME = 40 // percent of the media volume
+    private const val HEARD_YOU_MILLIS = 70
     private const val NO_SPEECH_FRAMES = 200 // 6 s
     private const val MAX_FRAMES = 1000 // 30 s
     private const val SPEECH_START_FRAMES = 3
@@ -167,6 +170,17 @@ object VoiceMode {
         return if (speaking && current == session) output.toByteArray() else null
     }
 
+    /** A short sound the moment recording ends, so the wait for the answer isn't silent. */
+    private fun heardYou() {
+        try {
+            val tone = ToneGenerator(AudioManager.STREAM_MUSIC, HEARD_YOU_VOLUME)
+            tone.startTone(ToneGenerator.TONE_PROP_BEEP, HEARD_YOU_MILLIS)
+            main.postDelayed({ tone.release() }, HEARD_YOU_MILLIS + 150L)
+        } catch (_: RuntimeException) {
+            // Android has a limited number of these. Doing without the sound is fine.
+        }
+    }
+
     // On the same thread as the recording itself, so the server always gets them in this order.
     private fun prepare(pcm: ByteArray) = network.execute {
         try {
@@ -178,6 +192,7 @@ object VoiceMode {
 
     private fun send(app: Context, recording: ByteArray, current: Int) {
         val ended = SystemClock.elapsedRealtime()
+        heardYou()
         Island.update(IslandMode.THINKING, "Thinking")
         val conversation = afterExchange
         val playback = Playback(app, current, conversation?.let { next -> { next(true) } }, ended)
