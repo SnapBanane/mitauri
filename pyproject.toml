@@ -24,6 +24,7 @@ dependencies = [
 
 [project.scripts]
 mitauri = "mitauri.__main__:main"
+mitauri-listener = "mitauri.listener:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]

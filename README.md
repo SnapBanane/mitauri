@@ -218,6 +218,12 @@ and tells the server, and the server checks the signature. To set one up, flash 
 is derived from your main key, so a stolen sensor can only fake itself. Someone close by could still relay its signal
 live, so never use presence as proof for anything that matters. The phone reports once a minute and nothing is saved.
 
+A computer can listen too, even once the server lives elsewhere. Run `uv run mitauri pair-listener laptop` on the
+server and the command it prints on the computer, then copy `deploy/mitauri-listener.service` to
+`~/.config/systemd/user/` and run `systemctl --user enable --now mitauri-listener`. It only talks to a Tailscale
+address, and its key can send these reports and nothing else. Its key is in `~/.local/share/mitauri-listener`. If the
+server's address changes, run the pairing again.
+
 ## Watch
 
 The phone talks to an ACT307 (VeryFitPro / iDO) watch directly over Bluetooth, so VeryFitPro isn't needed: uninstall

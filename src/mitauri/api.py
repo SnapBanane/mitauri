@@ -226,6 +226,8 @@ class Api:
         )
         if device is None:
             self._reject(address)
+        if self._devices.listener_name(device) and request.path != "/presence-report":
+            self._reject(address)
         request[DEVICE] = device
         return await handler(request)
 
@@ -712,7 +714,8 @@ class Api:
         if self._presence is None:
             return web.json_response({"ok": True})
         try:
-            self._presence.handle_report("phone", json.loads(await request.read()))
+            listener = self._devices.listener_name(request[DEVICE]) or "phone"
+            self._presence.handle_report(listener, json.loads(await request.read()))
         except ValueError:
             raise web.HTTPBadRequest()
         return web.json_response({"ok": True})

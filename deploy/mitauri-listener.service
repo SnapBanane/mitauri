@@ -1,0 +1,11 @@
+[Unit]
+Description=Mitauri listener: reports nearby sensors to the server over Tailscale
+
+[Service]
+WorkingDirectory=%h/dev/mitauri
+ExecStart=%h/.local/bin/uv run --quiet mitauri-listener run
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target

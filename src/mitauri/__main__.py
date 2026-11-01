@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import socket
 import sys
 import time
@@ -32,6 +33,8 @@ def main() -> None:
     commands.add_parser("run", help="start the Discord bot")
     commands.add_parser("google-login", help="connect Google Calendar and Tasks")
     commands.add_parser("pair", help="show the details to enter in the phone app")
+    pair_listener = commands.add_parser("pair-listener", help="show the command that connects a report-only computer")
+    pair_listener.add_argument("name", help="what this computer is called in presence answers, such as laptop")
     commands.add_parser("devices", help="list paired devices")
     commands.add_parser("unpair", help="remove a paired device").add_argument("device")
     module_command = commands.add_parser("modules", help="list modules, or switch one on or off")
@@ -60,6 +63,16 @@ def main() -> None:
             raise SystemExit("Set MITAURI_API_HOST in secrets.env to this device's Tailscale address first.")
         print(f"Server: {host}\nCode:   {Devices(config.data_dir).new_code()}")
         print("The code works once and expires in 10 minutes. The server must be running.")
+        return
+
+    if args.command == "pair-listener":
+        host = os.environ.get("MITAURI_API_HOST")
+        if not host:
+            raise SystemExit("Set MITAURI_API_HOST in secrets.env to this device's Tailscale address first.")
+        if args.name == "phone" or not re.fullmatch(r"[a-z0-9_-]{1,20}", args.name):
+            raise SystemExit("Use a short lowercase name other than phone.")
+        print(f"On that computer, within 10 minutes, with the server running:\n"
+              f"uv run mitauri-listener setup {host} {Devices(config.data_dir).new_code(listener=args.name)}")
         return
 
     if args.command == "devices":

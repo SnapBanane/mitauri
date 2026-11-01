@@ -29,6 +29,7 @@ from mitauri import geo, proposals, research, stocks, tools, transit, untis, wak
 from mitauri import modules
 from mitauri.__main__ import startup_summary
 from mitauri.chat_memory import ChatMemory
+from mitauri import listener
 from mitauri import presence as presence_module
 from mitauri.transit import best_trip, describe_trip, parse_departures
 from mitauri.config import Config, load_token, lock_down, move_secrets, new_token
@@ -870,6 +871,32 @@ def test_sensor_reports_survive_garbage():
     for garbage in (None, [], "x", {"sightings": 3}, {"listening": True, "sightings": [1, {"p": "zz", "r": 1}, {"p": 3}]}):
         sensor.handle_report("phone", garbage, NOW)
     assert sensor.status(NOW)["sensors"]["desk"]["phone"]["state"] == "away"
+
+
+def test_each_listener_has_its_own_view_of_a_sensor():
+    sensor = presence_module.Presence(KEY, ["desk"])
+    report = {"listening": True, "sightings": [{"p": signed_beacon("desk", 5), "r": -50}]}
+    sensor.handle_report("laptop", report, NOW)
+    status = sensor.status(NOW)["sensors"]["desk"]
+    assert status["laptop"]["state"] == "near"
+    assert status["phone"]["state"] == "unknown"
+
+
+def test_listener_only_talks_to_tailscale_addresses():
+    assert listener.is_on_tailnet("100.64.0.2") and listener.is_on_tailnet("server.tail1234.ts.net")
+    for bad in ("8.8.8.8", "192.168.1.5", "127.0.0.1", "example.com", "ts.net.example.com", ""):
+        assert not listener.is_on_tailnet(bad)
+    with pytest.raises(SystemExit):
+        listener.setup("8.8.8.8", "CODE", Path("/nonexistent"))
+
+
+def test_listener_only_keeps_sensor_beacons():
+    heard = {}
+    listener.note_sighting(heard, None, -50)
+    listener.note_sighting(heard, b"MT" + bytes(12), -50)
+    listener.note_sighting(heard, b"MS" + bytes(11), -50)
+    listener.note_sighting(heard, b"MS" + bytes(12), -50)
+    assert heard == {(b"MS" + bytes(12)).hex(): -50}
 
 
 def test_beacon_payload_is_what_the_sensor_expects():

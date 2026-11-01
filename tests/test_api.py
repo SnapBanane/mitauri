@@ -18,7 +18,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from mitauri import api as api_module
-from mitauri import app_update, instant, modules
+from mitauri import app_update, instant, listener, modules
 from mitauri.reminders import Reminders
 from mitauri import tools
 from mitauri.api import Api, SentenceSplitter, is_door_command, load_token
@@ -397,6 +397,30 @@ def test_presence_report_needs_a_paired_device(tmp_path):
         assert (await session.post(f"{BASE}/presence-report", data=b"{}")).status == 401
         assert (await session.post(f"{BASE}/presence-report", data=b"{}", headers=INTERNAL)).status == 401
     with_api(test, tmp_path)
+
+
+def test_a_listener_can_only_report_and_cannot_choose_to_be_more(tmp_path):
+    other = ec.generate_private_key(ec.SECP256R1())
+    public = other.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    devices = Devices(tmp_path)
+    assert devices.pair(devices.new_code(listener="laptop"), base64.b64encode(public).decode(), "phone")
+    device = device_id(public)
+    assert devices.listener_name(device) == "laptop"
+
+    def as_listener(method, path, body=b""):
+        return {"X-Mitauri-Auth": listener.auth_header(other, device, method, path, body)}
+
+    async def test(session):
+        body = listener.build_report(True, {})
+        assert (await session.post(f"{BASE}/presence-report", data=body, headers=as_listener("POST", "/presence-report", body))).status == 200
+        for path in ("/memories", "/presence-key"):
+            assert (await session.get(f"{BASE}{path}", headers=as_listener("GET", path))).status == 401
+    with_api(test, tmp_path)
+
+
+def test_a_normal_code_still_makes_a_full_device(tmp_path):
+    devices = Devices(tmp_path)
+    assert devices.listener_name(devices.pair(devices.new_code(), PUBLIC_B64, "phone")) is None
 
 
 def test_stop_only_means_the_alarm_while_it_is_ringing(tmp_path):

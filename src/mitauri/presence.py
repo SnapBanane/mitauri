@@ -160,12 +160,12 @@ class Presence:
         fresh = previous is None or now - previous[1] > AWAY_AFTER_SECONDS
         self._sightings[sensor, device] = (rssi if fresh else SMOOTHING * rssi + (1 - SMOOTHING) * previous[0], now)
 
-    def _beacon_status(self, name: str, listener: str, now: float) -> dict:
+    def _beacon_status(self, name: str, listener: str, now: float) -> dict:  # listener: who reports hearing it
         reported, listening = self._reporters.get(listener, (0.0, False))
         if now - reported > REPORTER_SILENT_AFTER_SECONDS:
-            return {"state": "unknown", "reason": "The phone hasn't reported lately."}
+            return {"state": "unknown", "reason": f"The {listener} hasn't reported lately."}
         if not listening:
-            return {"state": "unknown", "reason": "The phone can't listen: Bluetooth is off or not allowed."}
+            return {"state": "unknown", "reason": f"The {listener} can't listen: Bluetooth is off or not allowed."}
         return self._device_status(name, listener, now)
 
     def _device_status(self, sensor: str, device: str, now: float) -> dict:
@@ -185,7 +185,7 @@ class Presence:
             else:
                 sensors[sensor] = {device: self._device_status(sensor, device, now) for device in DEVICES}
         for name in self._beacon_keys:
-            sensors[name] = {"phone": self._beacon_status(name, "phone", now)}
+            sensors[name] = {who: self._beacon_status(name, who, now) for who in {"phone", *self._reporters}}
         return {"sensors": sensors}
 
     def watch_serial(self, port: str, sensor: str = DEFAULT_SENSOR) -> None:

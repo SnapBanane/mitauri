@@ -48,13 +48,21 @@ class Devices:
         self._save(devices)
         return removed
 
-    def new_code(self) -> str:
-        """Creates a one-time code. Only its hash is stored, and a new code replaces any old one."""
+    def listener_name(self, device: str) -> str | None:
+        """The name of a report-only device, or None for a full device such as the phone."""
+        return self.all().get(device, {}).get("listener")
+
+    def new_code(self, listener: str | None = None) -> str:
+        """Creates a one-time code. Only its hash is stored, and a new code replaces any old one.
+
+        A listener code makes a report-only device. The server decides this, whatever the device asks for.
+        """
         raw = "".join(secrets.choice(CODE_ALPHABET) for _ in range(10))
         self._code_file.write_text(json.dumps({
             "hash": hashlib.sha256(raw.encode()).hexdigest(),
             "expires": time.time() + PAIR_CODE_LIFETIME_SECONDS,
             "attempts": 0,
+            "listener": listener,
         }))
         return f"{raw[:5]}-{raw[5:]}"
 
@@ -82,6 +90,8 @@ class Devices:
         device = device_id(public_key)
         devices = self.all()
         devices[device] = {"key": public_key_b64, "name": name[:60], "added": int(time.time())}
+        if state.get("listener"):
+            devices[device]["listener"] = state["listener"]
         self._save(devices)
         return device
 
