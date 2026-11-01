@@ -20,7 +20,12 @@ echo "Copying $tag to the server"
 git -C "$repo" archive "$tag" -- . ':!android' ':!firmware' \
     | ssh -i "$key" "$server" "sudo -u mitauri bash -c 'rm -rf ~mitauri/releases/$tag && mkdir -p ~mitauri/releases/$tag && tar -x -C ~mitauri/releases/$tag'"
 
-ssh -i "$key" "$server" "sudo -iu mitauri bash -s -- $tag" <<'REMOTE'
+show_log() {
+    echo "Last log lines from the server:" >&2
+    ssh -i "$key" "$server" "sudo -n journalctl _SYSTEMD_USER_UNIT=mitauri.service -n 15 --no-pager -o cat" >&2 || true
+}
+
+ssh -i "$key" "$server" "sudo -iu mitauri bash -s -- $tag" <<'REMOTE' || { show_log; exit 1; }
 set -euo pipefail
 tag="$1"
 export XDG_RUNTIME_DIR="/run/user/$(id -u)" PATH="$HOME/.local/bin:$PATH"
@@ -50,8 +55,7 @@ for _ in $(seq 1 30); do
     sleep 2
 done
 
-echo "$tag didn't come up. Its last log lines:" >&2
-journalctl --user -u mitauri -n 15 --no-pager >&2 || true
+echo "$tag didn't come up." >&2
 if [ -n "$previous" ]; then
     ln -sfn "$previous" "$HOME/current"
     systemctl --user restart mitauri

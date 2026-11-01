@@ -47,10 +47,11 @@ def main() -> None:
     sensor_key = commands.add_parser("presence-key", help="give a sensor on USB its key, so it can broadcast")
     sensor_key.add_argument("name")
     sensor_key.add_argument("--port", default="/dev/ttyACM0")
+    sensor_key.add_argument("--private", action="store_true", help="for a sensor that travels: broadcast only, and be hard for strangers to follow")
     commands.add_parser("wake-test", help="play a test alarm on the speaker, once")
     commands.add_parser("wake-stop", help="stop an alarm that's playing")
     proposal = commands.add_parser("proposal", help="review changes Mitauri has suggested to itself")
-    proposal.add_argument("action", choices=["list", "show", "apply", "discard"])
+    proposal.add_argument("action", choices=["list", "show", "patch", "apply", "discard"])
     proposal.add_argument("id", nargs="?")
     ask = commands.add_parser("ask", help="send one message from the terminal")
     ask.add_argument("message")
@@ -123,7 +124,8 @@ def main() -> None:
         connection.open()
         time.sleep(3)  # opening the port can restart the board, and it would miss the key while booting
         connection.reset_input_buffer()
-        connection.write(f"KEY {beacon_key(load_key(data_dir), args.name).hex()}\n".encode())
+        command = "PKEY" if args.private else "KEY"
+        connection.write(f"{command} {beacon_key(load_key(data_dir), args.name).hex()}\n".encode())
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             if b'"key":"saved"' in connection.readline():
@@ -217,9 +219,12 @@ def main() -> None:
     presence = Presence(load_key(config.data_dir), parse_beacons(os.environ.get("MITAURI_PRESENCE_BEACONS", "")))
     if modules.is_enabled(config.data_dir, "presence"):
         sensors = parse_sensors(os.environ.get("MITAURI_PRESENCE_SENSORS", ""))
-        for name, port in (sensors or {DEFAULT_SENSOR: os.environ.get("MITAURI_PRESENCE_PORT", "/dev/ttyUSB0")}).items():
+        if legacy_port := os.environ.get("MITAURI_PRESENCE_PORT"):
+            sensors = sensors or {DEFAULT_SENSOR: legacy_port}
+        for name, port in sensors.items():
             presence.watch_serial(port, name)
-        start_laptop_beacon(load_key(config.data_dir))
+        if sensors:  # the beacon is only for USB sensors to hear, and a server has no Bluetooth to send it with
+            start_laptop_beacon(load_key(config.data_dir))
     history = ChatMemory(config.data_dir / "chat_memory.db")
     api = Api(brain, load_token(config.data_dir), config.data_dir, speech, memory, presence, history)
     bot = MitauriBot(int(user_id), Brain(config, memory, limited=True), reminders, config, api, brain, speech, memory)
@@ -257,10 +262,15 @@ def review_proposal(action: str, proposal_id: str | None) -> None:
             raise SystemExit("No such proposal.")
         print(f"Request: {state['request']}\n\n{state['summary']}\n")
         print(proposals.diff(proposal_id))
+    elif action == "patch":
+        print(proposals.diff(proposal_id), end="")
     elif action == "discard":
         proposals.discard(proposal_id)
         print("Discarded.")
     else:
+        if not (proposals.PROJECT / ".git").exists():
+            raise SystemExit("A released copy is replaced by the next release, so apply it on the laptop instead:\n"
+                             f"ssh <server> \"sudo -iu mitauri /home/mitauri/current/.venv/bin/mitauri proposal patch {proposal_id}\" | git apply")
         # Asked here on purpose: applying must take a person at this keyboard.
         if not sys.stdin.isatty():
             raise SystemExit("Applying only works from an interactive terminal.")

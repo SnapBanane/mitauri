@@ -224,6 +224,11 @@ server and the command it prints on the computer, then copy `deploy/mitauri-list
 address, and its key can send these reports and nothing else. Its key is in `~/.local/share/mitauri-listener`. If the
 server's address changes, run the pairing again.
 
+For a sensor that travels, like one in a bag on a powerbank, use `uv run mitauri presence-key bag --port /dev/ttyUSB0
+--private`. It stops listening and only broadcasts, hides its counter and changes its Bluetooth address every minute.
+Strangers can't follow it by its address or counter, though the fixed `MS` marker in the broadcast still shows that a
+Mitauri beacon is nearby. Check that your powerbank stays on, because many switch off when so little power is drawn.
+
 ## Watch
 
 The phone talks to an ACT307 (VeryFitPro / iDO) watch directly over Bluetooth, so VeryFitPro isn't needed: uninstall
@@ -327,6 +332,12 @@ It runs the tests on the laptop, copies that tag to the server without the Andro
 again there and switches over. If the server doesn't come back up, it returns to the previous version by itself.
 Secrets don't travel with a release: `secrets.env` is only copied by hand, once.
 
+A new phone app goes the same way, only when you mean to release it: build it, then run `scripts/publish-app.sh`.
+
+Self-building proposals are written on the server but can't be applied there, as the next release would replace them.
+`mitauri proposal apply` on the server prints the command that brings one to the laptop. They can't change the Android
+code, as the server doesn't have it.
+
 Don't run the laptop and the server at the same time with the same Discord token, or both will answer.
 
 The laptop also pulls a backup each day. The server encrypts it to a public key, so it can't read its own backups, and
@@ -336,7 +347,7 @@ the backup's login can do nothing except fetch one. Fourteen days are kept, matc
 cp deploy/mitauri-backup.* ~/.config/systemd/user/ && systemctl --user enable --now mitauri-backup.timer
 ```
 
-To restore, run `gpg -d <backup> | tar -x` in an empty folder. It asks for the passphrase of the `mitauri-backup` key,
+To restore, run `gpg -d <backup> | tar -xz` in an empty folder. It asks for the passphrase of the `mitauri-backup` key,
 so keep that passphrase and the key somewhere other than this laptop as well.
 
 ## Connect Google Calendar and Tasks

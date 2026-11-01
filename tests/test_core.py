@@ -855,6 +855,20 @@ def test_sensor_beacon_is_only_believed_when_signed_and_new():
     assert heard(sensor, signed_beacon("desk", 6), gone + 200) == "near"
 
 
+def test_private_beacon_hides_its_counter_and_is_still_believed():
+    key = presence_module.beacon_key(KEY, "bag")
+    first = presence_module.private_beacon_payload(key, 70000)
+    second = presence_module.private_beacon_payload(key, 70001)
+    assert len(first) == presence_module.BEACON_PAYLOAD_BYTES
+    assert first[2:6] != struct.pack(">I", 70000)
+    assert first[2:5] != second[2:5]  # a plain counter would share these from one minute to the next
+    sensor = presence_module.Presence(KEY, ["bag"])
+    assert sensor._beacon_for(first, NOW) == "bag"
+    assert sensor._beacon_for(second, NOW) == "bag"
+    assert sensor._beacon_for(first, NOW) is None  # an older recording
+    assert presence_module.Presence(KEY, ["desk"])._beacon_for(first, NOW) is None
+
+
 def test_sensor_beacon_says_unknown_when_the_phone_cannot_tell():
     sensor = presence_module.Presence(KEY, ["desk"])
     state = lambda now: sensor.status(now)["sensors"]["desk"]["phone"]["state"]

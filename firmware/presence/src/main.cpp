@@ -1,10 +1,13 @@
 // A dumb presence sensor. It listens for Mitauri's Bluetooth beacon and reports what it hears over USB.
 // It can't tell whose beacon it is: the server checks the rotating token.
 // Once given a key over USB it also broadcasts a signed beacon, so it can sit on plain power and the phone hears it.
+// A sensor that travels gets a private key instead: it only broadcasts, hides its counter and changes its Bluetooth
+// address with every window, so strangers can't follow one device around by its address or its counting.
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <Preferences.h>
 #include <mbedtls/md.h>
+#include "nimble/nimble/host/include/host/ble_hs_id.h"
 
 static const uint16_t COMPANY_ID = 0xFFFF;
 static const uint8_t MAGIC[2] = {'M', 'T'};
@@ -19,15 +22,25 @@ static const uint32_t MAX_WINDOW = 0xFFFF;
 static Preferences storage;
 static uint8_t beaconKey[KEY_BYTES];
 static bool hasBeaconKey = false;
+static bool isPrivate = false;
 static uint32_t bootCount = 0;
 static uint32_t beaconWindow = 0;
+
+static const uint8_t MASK_LABEL[4] = {'m', 'a', 's', 'k'};
 
 static void broadcast() {
     // No clock survives a power cut, so a counter that only grows takes its place: the boot count, then minutes.
     const uint32_t counter = (bootCount << 16) | beaconWindow;
-    const uint8_t counterBytes[4] = {uint8_t(counter >> 24), uint8_t(counter >> 16), uint8_t(counter >> 8), uint8_t(counter)};
+    uint8_t counterBytes[4] = {uint8_t(counter >> 24), uint8_t(counter >> 16), uint8_t(counter >> 8), uint8_t(counter)};
     uint8_t digest[32];
     mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), beaconKey, KEY_BYTES, counterBytes, 4, digest);
+    if (isPrivate) {
+        uint8_t maskInput[sizeof(MASK_LABEL) + TOKEN_BYTES], mask[32];
+        memcpy(maskInput, MASK_LABEL, sizeof(MASK_LABEL));
+        memcpy(maskInput + sizeof(MASK_LABEL), digest, TOKEN_BYTES);
+        mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), beaconKey, KEY_BYTES, maskInput, sizeof(maskInput), mask);
+        for (size_t i = 0; i < 4; i++) counterBytes[i] ^= mask[i];
+    }
 
     std::string data;
     data.push_back(char(COMPANY_ID & 0xFF));
@@ -41,6 +54,10 @@ static void broadcast() {
     advert.setManufacturerData(data);
     NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
     advertising->stop();
+    if (isPrivate) {
+        ble_addr_t address;
+        if (ble_hs_id_gen_rnd(1, &address) == 0) ble_hs_id_set_rnd(address.val);  // a new non-resolvable address
+    }
     advertising->setAdvertisementData(advert);
     advertising->setAdvertisementType(BLE_GAP_CONN_MODE_NON);
     advertising->setMinInterval(400);  // 250 ms
@@ -54,20 +71,22 @@ static int hexValue(char c) {
     return -1;
 }
 
-// Takes "KEY <64 hex digits>" from USB. The key is never printed back.
+// Takes "KEY <64 hex digits>", or "PKEY" for a private beacon, from USB. The key is never printed back.
 static void handleCommand(const String &line) {
-    if (!line.startsWith("KEY ") || line.length() != 4 + KEY_BYTES * 2) return;
+    const bool wantsPrivate = line.startsWith("PKEY ");
+    const size_t start = wantsPrivate ? 5 : 4;
+    if ((!wantsPrivate && !line.startsWith("KEY ")) || line.length() != start + KEY_BYTES * 2) return;
     uint8_t key[KEY_BYTES];
     for (size_t i = 0; i < KEY_BYTES; i++) {
-        const int high = hexValue(line[4 + i * 2]), low = hexValue(line[5 + i * 2]);
+        const int high = hexValue(line[start + i * 2]), low = hexValue(line[start + 1 + i * 2]);
         if (high < 0 || low < 0) return;
         key[i] = uint8_t(high << 4 | low);
     }
     storage.putBytes("key", key, KEY_BYTES);
-    memcpy(beaconKey, key, KEY_BYTES);
-    hasBeaconKey = true;
-    broadcast();
+    storage.putBool("private", wantsPrivate);
     Serial.println("{\"key\":\"saved\"}");
+    Serial.flush();
+    ESP.restart();  // private mode changes how Bluetooth starts, and a new boot count keeps the counter growing
 }
 
 static void readCommands() {
@@ -98,15 +117,21 @@ class Listener : public NimBLEAdvertisedDeviceCallbacks {
 
 void setup() {
     Serial.begin(115200);
-    NimBLEDevice::init("");
-    NimBLEScan *scan = NimBLEDevice::getScan();
-    scan->setAdvertisedDeviceCallbacks(new Listener(), true);  // true: report repeat sightings
-    scan->setActiveScan(false);  // only listens, and never transmits a request
-    scan->setInterval(160);
-    scan->setWindow(80);
-    scan->start(0, nullptr, false);
-
     storage.begin("mitauri");
+    isPrivate = storage.getBool("private", false);
+    NimBLEDevice::init("");
+    if (isPrivate) {
+        setCpuFrequencyMhz(80);  // it runs from a powerbank and has little to do
+        NimBLEDevice::setOwnAddrType(BLE_OWN_ADDR_RANDOM);
+    } else {
+        NimBLEScan *scan = NimBLEDevice::getScan();
+        scan->setAdvertisedDeviceCallbacks(new Listener(), true);  // true: report repeat sightings
+        scan->setActiveScan(false);  // only listens, and never transmits a request
+        scan->setInterval(160);
+        scan->setWindow(80);
+        scan->start(0, nullptr, false);
+    }
+
     bootCount = (storage.getUInt("boots", 0) + 1) & 0xFFFF;  // 65,000 power cuts away from wrapping
     storage.putUInt("boots", bootCount);
     hasBeaconKey = storage.getBytes("key", beaconKey, KEY_BYTES) == KEY_BYTES;

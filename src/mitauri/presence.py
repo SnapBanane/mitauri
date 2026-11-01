@@ -79,6 +79,17 @@ def beacon_signature(key: bytes, counter: int) -> bytes:
     return hmac.new(key, struct.pack(">I", counter), hashlib.sha256).digest()[:TOKEN_BYTES]
 
 
+def beacon_mask(key: bytes, signature: bytes) -> bytes:
+    """Hides a travelling sensor's counter, which would otherwise let a stranger recognise it from minute to minute."""
+    return hmac.new(key, b"mask" + signature, hashlib.sha256).digest()[:4]
+
+
+def private_beacon_payload(key: bytes, counter: int) -> bytes:
+    signature = beacon_signature(key, counter)
+    hidden = bytes(a ^ b for a, b in zip(struct.pack(">I", counter), beacon_mask(key, signature)))
+    return BEACON_MAGIC + hidden + signature
+
+
 def parse_beacons(text: str) -> list[str]:
     return [name.strip() for name in text.split(",") if name.strip()]
 
@@ -125,9 +136,12 @@ class Presence:
     def _beacon_for(self, payload: bytes, now: float) -> str | None:
         if len(payload) != BEACON_PAYLOAD_BYTES or payload[:2] != BEACON_MAGIC:
             return None
-        counter = struct.unpack(">I", payload[2:6])[0]
+        sent, signature = payload[2:6], payload[6:]
         for name, key in self._beacon_keys.items():
-            if not hmac.compare_digest(beacon_signature(key, counter), payload[6:]):
+            hidden = bytes(a ^ b for a, b in zip(sent, beacon_mask(key, signature)))
+            counters = (struct.unpack(">I", part)[0] for part in (sent, hidden))
+            counter = next((c for c in counters if hmac.compare_digest(beacon_signature(key, c), signature)), None)
+            if counter is None:
                 continue
             newest, since = self._beacon_counters.get(name, (-1, now))
             if counter > newest:
