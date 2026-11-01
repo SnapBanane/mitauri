@@ -139,6 +139,17 @@
                 android:value="Keeps the connection to the user's self-hosted personal assistant" />
         </service>
 
+        <!-- Not exported: only the system installer gets access, and only to the update file. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_files" />
+        </provider>
+
         <receiver
             android:name=".UpdateReceiver"
             android:exported="false" />

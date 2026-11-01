@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import errno
 import json
 import logging
 import os
@@ -168,6 +169,10 @@ def main() -> None:
         asyncio.run(serve(bot, token, api, brain))
     except KeyboardInterrupt:
         pass
+    except OSError as error:
+        if error.errno != errno.EADDRINUSE:
+            raise
+        raise SystemExit(f"Mitauri is already running: port {API_PORT} is in use. Stop the other copy first.") from None
 
 
 def alarm_notice(data_dir, over: bool, text: str = "") -> bool:
@@ -221,12 +226,15 @@ def startup_summary(config, whisper_model: str, whisper_threads: int) -> str:
     disabled = [m["name"] for m in modules.listing(config.data_dir) if not m["enabled"]]
     language = os.environ.get("MITAURI_SPEECH_LANGUAGE", "de")
     wake_settings = wake.load_settings(config.data_dir)
+    whisper = f"Whisper {whisper_model}, {whisper_threads} threads"
+    parakeet = os.environ.get("MITAURI_SPEECH_ENGINE", "parakeet") == "parakeet"
+    hearing = f"Parakeet, and {whisper} for short clips" if parakeet else whisper
     lines = [
         "Mitauri is starting",
         f"  Chat model:      {config.model}",
         f"  Hard problems:   {config.thinking_model}",
         f"  Self-building:   {os.environ.get('MITAURI_PROPOSAL_MODEL', 'opus')}",
-        f"  Speech to text:  Whisper {whisper_model}, {whisper_threads} threads, language {language}",
+        f"  Speech to text:  {hearing}, language {language}",
         f"  Voices:          {', '.join(name for _, name in VOICES.values())}",
         f"  Memory search:   {SEARCH_MODEL.split('/')[-1]} (loads on first search)",
         f"  Wake-up alarm:   {'on' if wake_settings['enabled'] else 'off'}",

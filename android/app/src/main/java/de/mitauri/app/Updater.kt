@@ -7,6 +7,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -14,6 +15,7 @@ import android.os.SystemClock
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.FileProvider
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
@@ -64,7 +66,10 @@ object Updater {
                 val code = info.optLong("version_code")
                 val current = app.packageManager.getPackageInfo(app.packageName, 0).longVersionCode
                 when {
-                    code <= current -> if (byHand) show("Up to date")
+                    code <= current -> {
+                        updateFile(app).delete()
+                        if (byHand) show("Up to date")
+                    }
                     // Installing closes the app, so never in the middle of something.
                     !byHand && (MainActivity.isVisible || VoiceMode.isListening || VoiceMode.afterExchange != null) -> Unit
                     !byHand && offered == code -> Unit
@@ -87,8 +92,11 @@ object Updater {
 
     private fun show(text: String) = main.post { status = text }
 
+    // In its own folder, because that folder is all the system installer can be given access to.
+    private fun updateFile(app: Context) = File(File(app.cacheDir, "updates").apply { mkdirs() }, "update.apk")
+
     private fun download(app: Context, sha256: String, size: Long): File {
-        val file = File(app.cacheDir, "update.apk")
+        val file = updateFile(app)
         val digest = MessageDigest.getInstance("SHA-256")
         Mitauri.downloadUpdate { input ->
             file.outputStream().use { output ->
@@ -144,8 +152,6 @@ object Updater {
         } catch (error: Exception) {
             installer.abandonSession(id)
             throw error
-        } finally {
-            apk.delete()
         }
     }
 
@@ -155,15 +161,33 @@ object Updater {
                 @Suppress("DEPRECATION")
                 val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT) ?: return
                 confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                if (MainActivity.isVisible) context.startActivity(confirm) else notifyToConfirm(context, confirm)
+                ask(context, confirm)
             }
             PackageInstaller.STATUS_SUCCESS -> Unit // This process ends now, and BootReceiver starts the new one.
             else -> {
-                offered = 0
                 val detail = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "code $result"
-                show("Update failed: $detail")
+                val apk = updateFile(context)
+                // MIUI refuses this way of installing with "Permission denied", but allows its own installer screen.
+                if (result != PackageInstaller.STATUS_FAILURE_ABORTED || !apk.exists()) {
+                    offered = 0
+                    show("Update failed: $detail")
+                } else {
+                    show("Tap Install to update")
+                    ask(context, systemInstaller(context, apk))
+                }
             }
         }
+    }
+
+    private fun systemInstaller(context: Context, apk: File): Intent {
+        val uri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.updates", apk)
+        return Intent(Intent.ACTION_VIEW)
+            .setDataAndType(uri, "application/vnd.android.package-archive")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+
+    private fun ask(context: Context, confirm: Intent) {
+        if (MainActivity.isVisible) context.startActivity(confirm) else notifyToConfirm(context, confirm)
     }
 
     private fun notifyToConfirm(context: Context, confirm: Intent) {
