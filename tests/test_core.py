@@ -869,6 +869,81 @@ def test_private_beacon_hides_its_counter_and_is_still_believed():
     assert presence_module.Presence(KEY, ["desk"])._beacon_for(first, NOW) is None
 
 
+def make_bot_for_left_behind(tmp_path):
+    class Left:
+        def newly_left_behind(self):
+            return ["bag"]
+    class NoPhone:
+        async def deliver(self, kind, text):
+            return False
+    config = Config(data_dir=tmp_path, timezone="Europe/Berlin", model="haiku", claude_bin="claude")
+    bot = MitauriBot(42, None, Reminders(tmp_path / "reminders.db"), config, NoPhone())
+    bot.presence, bot.watched_labels = Left(), {"bag": "Tasche"}
+    return bot
+
+
+def bag_report(counter):
+    key = presence_module.beacon_key(KEY, "bag")
+    return {"listening": True, "sightings": [{"p": presence_module.private_beacon_payload(key, counter).hex(), "r": -60}]}
+
+
+def empty_report(listening=True):
+    return {"listening": listening, "sightings": []}
+
+
+def test_left_behind_warns_once_after_two_minutes_and_again_after_being_heard():
+    sensor = presence_module.Presence(KEY, ["bag"], ["bag"])
+    sensor.handle_report("phone", bag_report(1), NOW)
+    sensor.handle_report("phone", empty_report(), NOW + 60)
+    assert sensor.newly_left_behind(NOW + 119) == []
+    sensor.handle_report("phone", empty_report(), NOW + 120)
+    assert sensor.newly_left_behind(NOW + 120) == ["bag"]
+    assert sensor.newly_left_behind(NOW + 130) == []
+    sensor.handle_report("phone", bag_report(2), NOW + 180)
+    assert sensor.newly_left_behind(NOW + 180) == []
+    sensor.handle_report("phone", empty_report(), NOW + 300)
+    assert sensor.newly_left_behind(NOW + 300) == ["bag"]
+
+
+def test_laptop_hearing_the_bag_counts_as_within_reach():
+    sensor = presence_module.Presence(KEY, ["bag"], ["bag"])
+    sensor.handle_report("phone", bag_report(1), NOW)
+    sensor.handle_report("laptop", bag_report(2), NOW + 100)
+    sensor.handle_report("phone", empty_report(), NOW + 125)
+    assert sensor.newly_left_behind(NOW + 125) == []
+    sensor.handle_report("phone", empty_report(), NOW + 220)
+    assert sensor.newly_left_behind(NOW + 220) == ["bag"]
+
+
+def test_left_behind_stays_quiet_when_the_phone_cannot_tell():
+    sensor = presence_module.Presence(KEY, ["bag"], ["bag"])
+    sensor.handle_report("laptop", empty_report(), NOW)
+    assert sensor.newly_left_behind(NOW + 500) == []  # never heard since starting
+    sensor.handle_report("phone", bag_report(1), NOW)
+    assert sensor.newly_left_behind(NOW + 300) == []  # the phone hasn't reported since
+    sensor.handle_report("phone", empty_report(listening=False), NOW + 300)
+    assert sensor.newly_left_behind(NOW + 300) == []  # Bluetooth is off
+    sensor.handle_report("phone", empty_report(), NOW + 300)
+    assert sensor.newly_left_behind(NOW + 300 + presence_module.PHONE_REPORT_FRESH_SECONDS + 1) == []  # gone quiet
+
+
+def test_only_watched_beacons_warn():
+    sensor = presence_module.Presence(KEY, ["bag"], [])
+    sensor.handle_report("phone", bag_report(1), NOW)
+    sensor.handle_report("phone", empty_report(), NOW + 200)
+    assert sensor.newly_left_behind(NOW + 200) == []
+
+
+def test_left_behind_goes_to_discord_if_the_phone_cannot_take_it(tmp_path):
+    bot = make_bot_for_left_behind(tmp_path)
+    sent = []
+    async def to_owner(text):
+        sent.append(text)
+    bot._send_to_owner = to_owner
+    asyncio.run(bot._check_left_behind())
+    assert len(sent) == 1 and sent[0].startswith("Tasche zurückgelassen?")
+
+
 def test_sensor_beacon_says_unknown_when_the_phone_cannot_tell():
     sensor = presence_module.Presence(KEY, ["desk"])
     state = lambda now: sensor.status(now)["sensors"]["desk"]["phone"]["state"]

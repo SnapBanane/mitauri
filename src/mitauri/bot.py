@@ -58,6 +58,8 @@ class MitauriBot(discord.Client):
         self._next_timetable_check = 0.0
         self._warned_timetable = False
         self._wake_task = None
+        self.presence = None
+        self.watched_labels: dict[str, str] = {}
         self._briefing_brain = briefing_brain or brain
         self._told_unreachable: set[int] = set()
         self._data_dir = config.data_dir
@@ -109,7 +111,7 @@ class MitauriBot(discord.Client):
     async def _tick(self) -> None:
         now = datetime.now(self._timezone)
         # The alarm goes first, and each step on its own: one broken reminder or a Discord outage must not stop the rest.
-        steps = [self._check_school_wake(now), self._deliver_reminders(now), self._report_proposals(), self._report_research(), self._send_briefing(now)]
+        steps = [self._check_school_wake(now), self._deliver_reminders(now), self._report_proposals(), self._check_left_behind(), self._report_research(), self._send_briefing(now)]
         for step in steps:
             try:
                 await step
@@ -210,6 +212,17 @@ class MitauriBot(discord.Client):
         except Exception:  # whatever went wrong with the speaker, the phone still has to ring
             log.exception("The speaker alarm failed")
             return None
+
+    async def _check_left_behind(self) -> None:
+        if self.presence is None or not modules.is_enabled(self._data_dir, "presence"):
+            return
+        for name in self.presence.newly_left_behind():
+            label = self.watched_labels.get(name, name)
+            text = (f"{label} zurückgelassen? Seit 2 Minuten nicht mehr in Reichweite von Handy und Laptop. "
+                    "Oder sie hat keinen Strom mehr.")
+            record(self._data_dir, "left_behind_alert")  # no name or place, as nothing about location is kept
+            if not (self._phone and await self._phone.deliver("notify", text)):
+                await self._send_to_owner(text)
 
     async def _report_research(self) -> None:
         for job in research.unreported(self._data_dir):

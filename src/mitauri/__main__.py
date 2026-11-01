@@ -216,7 +216,8 @@ def main() -> None:
     new_token(config.data_dir)
     session = (config.data_dir / "session.txt")
     prune_transcripts(config.data_dir, {session.read_text()} if session.exists() else set())
-    presence = Presence(load_key(config.data_dir), parse_beacons(os.environ.get("MITAURI_PRESENCE_BEACONS", "")))
+    watched = parse_sensors(os.environ.get("MITAURI_PRESENCE_WATCH", ""))
+    presence = Presence(load_key(config.data_dir), parse_beacons(os.environ.get("MITAURI_PRESENCE_BEACONS", "")), list(watched))
     if modules.is_enabled(config.data_dir, "presence"):
         sensors = parse_sensors(os.environ.get("MITAURI_PRESENCE_SENSORS", ""))
         if legacy_port := os.environ.get("MITAURI_PRESENCE_PORT"):
@@ -228,6 +229,7 @@ def main() -> None:
     history = ChatMemory(config.data_dir / "chat_memory.db")
     api = Api(brain, load_token(config.data_dir), config.data_dir, speech, memory, presence, history)
     bot = MitauriBot(int(user_id), Brain(config, memory, limited=True), reminders, config, api, brain, speech, memory)
+    bot.presence, bot.watched_labels = presence, watched
     api.discord_ready = lambda: bot.is_ready() and not bot.is_closed()
     try:
         asyncio.run(serve(bot, token, api, brain))

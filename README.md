@@ -229,6 +229,11 @@ For a sensor that travels, like one in a bag on a powerbank, use `uv run mitauri
 Strangers can't follow it by its address or counter, though the fixed `MS` marker in the broadcast still shows that a
 Mitauri beacon is nearby. Check that your powerbank stays on, because many switch off when so little power is drawn.
 
+To be warned when it's left behind, add `MITAURI_PRESENCE_WATCH=bag=Tasche`. You get one notification, or a Discord
+message if the phone can't take it, once neither phone nor laptop has heard it for 2 minutes, and it can warn again
+after it's been heard. It stays quiet if the phone isn't reporting or its Bluetooth is off. The laptop hearing it counts
+as within reach, so leaving it beside a running laptop won't warn you.
+
 ## Watch
 
 The phone talks to an ACT307 (VeryFitPro / iDO) watch directly over Bluetooth, so VeryFitPro isn't needed: uninstall

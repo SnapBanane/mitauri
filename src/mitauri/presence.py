@@ -36,6 +36,8 @@ BEACON_PAYLOAD_BYTES = 14  # magic, 4-byte counter, 8-byte signature
 BEACON_COUNTER_STALE_SECONDS = 180  # a sensor moves its counter on every minute, so older is a replay
 REPORTER_SILENT_AFTER_SECONDS = 300
 MAX_REPORT_SIGHTINGS = 16
+LEFT_BEHIND_AFTER_SECONDS = 120
+PHONE_REPORT_FRESH_SECONDS = 90  # the phone reports each minute, so older means it can't vouch for this moment
 
 log = logging.getLogger(__name__)
 
@@ -99,7 +101,9 @@ def distance_metres(rssi: float) -> float:
 
 
 class Presence:
-    def __init__(self, key: bytes, beacons: tuple[str, ...] | list[str] = ()):
+    def __init__(self, key: bytes, beacons: tuple[str, ...] | list[str] = (), watched: tuple[str, ...] | list[str] = ()):
+        self._watched = tuple(watched)
+        self._left_behind: set[str] = set()
         self._keys = {device: device_key(key, device) for device in DEVICES}
         self._beacon_keys = {name: beacon_key(key, name) for name in beacons}
         self._beacon_counters: dict[str, tuple[int, float]] = {}  # newest counter, and when it first appeared
@@ -173,6 +177,27 @@ class Presence:
         previous = self._sightings.get((sensor, device))
         fresh = previous is None or now - previous[1] > AWAY_AFTER_SECONDS
         self._sightings[sensor, device] = (rssi if fresh else SMOOTHING * rssi + (1 - SMOOTHING) * previous[0], now)
+
+    def newly_left_behind(self, now: float | None = None) -> list[str]:
+        """Watched beacons that nobody has heard for a while. Each is named once, until it's heard again.
+
+        Only the phone can say so, as it's what the user carries. Without a recent report from a phone that's listening
+        nothing is known, and a beacon never heard since the server started hasn't been left anywhere yet.
+        """
+        now = time.time() if now is None else now
+        reported, listening = self._reporters.get("phone", (0.0, False))
+        found = []
+        for name in self._watched:
+            heard = [when for (sensor, _), (_, when) in self._sightings.items() if sensor == name]
+            if not heard:
+                continue
+            if now - max(heard) < LEFT_BEHIND_AFTER_SECONDS:
+                self._left_behind.discard(name)
+            elif (name not in self._left_behind and listening and reported > max(heard)
+                    and now - reported <= PHONE_REPORT_FRESH_SECONDS):
+                self._left_behind.add(name)
+                found.append(name)
+        return found
 
     def _beacon_status(self, name: str, listener: str, now: float) -> dict:  # listener: who reports hearing it
         reported, listening = self._reporters.get(listener, (0.0, False))
