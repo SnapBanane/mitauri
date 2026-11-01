@@ -19,7 +19,8 @@ STREAM_LINE_LIMIT = 10 * 1024 * 1024
 TRANSCRIPT_RETENTION_DAYS = 14
 SPOKEN_HINT = (
     "[This reply will be read aloud. Use at most two short sentences unless I ask for detail. "
-    "No lists, Markdown or emoji.]"
+    "No lists, Markdown or emoji. If you need a tool first, say two or three words before calling it, "
+    "so I hear you right away.]"
 )
 
 SYSTEM_PROMPT = """You are Mitauri, a personal AI assistant, speaking with your one user.

@@ -251,8 +251,11 @@ enter the address and one-time code in the app. Finish the checklist on the app'
 - Encrypt the disk that holds the data folder, as nothing else protects it if the machine is stolen.
 - File permissions don't carry over to Windows. Restrict the data folder with `icacls` there.
 
-Voice mode records on the phone and sends the audio to your server, which uses Whisper for recognition
-and Piper for the voice. Both run locally and are downloaded on first start, about 700 MB in all. Your
+Voice mode records on the phone and sends the audio to your server, which uses Parakeet for recognition,
+Whisper for clips under two seconds, and Piper for the voice. All run locally and are downloaded on first
+start, about 1.1 GB in all, and recognition needs about 2 GB of memory. If it hears worse than before, set
+`MITAURI_SPEECH_ENGINE=whisper`, which is slower. The server log's `Voice timing` lines show how long
+each reply took. Your
 words still go to Claude as text. Voice mode doesn't run over the lock screen.
 
 ## Connect Google Calendar and Tasks

@@ -11,6 +11,7 @@ import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.os.Handler
 import android.os.Looper
+import android.util.Base64
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.Executors
@@ -20,7 +21,7 @@ import kotlin.math.sqrt
 object VoiceMode {
     private const val SAMPLE_RATE = 16_000
     private const val FRAME_SAMPLES = 480 // 30 ms
-    private const val END_SILENCE_FRAMES = 30 // 0.9 s
+    private const val END_SILENCE_FRAMES = 20 // 0.6 s
     private const val NO_SPEECH_FRAMES = 200 // 6 s
     private const val MAX_FRAMES = 1000 // 30 s
     private const val SPEECH_START_FRAMES = 3
@@ -181,7 +182,11 @@ object VoiceMode {
                             }
                         }
                         event.has("door") -> main.post { DoorOpener.command(app) }
-                        event.has("sentence") -> playback.add(event.getString("sentence"), language)
+                        event.has("sentence") -> playback.add(
+                            event.getString("sentence"),
+                            language,
+                            event.optString("audio").takeIf { it.isNotEmpty() }?.let { Base64.decode(it, Base64.DEFAULT) },
+                        )
                         event.has("reply") -> {
                             answered = true
                             val reply = event.getString("reply")
@@ -201,7 +206,7 @@ object VoiceMode {
         }
     }
 
-    /** Plays sentences in order, each fetched as soon as the server has written it. */
+    /** Plays sentences in order, each as soon as its voice is here. */
     private class Playback(
         private val app: Context,
         private val current: Int,
@@ -215,13 +220,14 @@ object VoiceMode {
         private var failed = false
         private val isCurrent get() = current == session
 
-        fun add(sentence: String, language: String) {
+        /** audio is the voice if the server already sent it. Otherwise it gets fetched. */
+        fun add(sentence: String, language: String, audio: ByteArray? = null) {
             val index = added++
             voices.execute {
                 if (current != session) return@execute
                 try {
                     val file = File(app.cacheDir, "speech-$current-$index.wav")
-                    file.writeBytes(Mitauri.fetchSpeech(sentence, language))
+                    file.writeBytes(audio ?: Mitauri.fetchSpeech(sentence, language))
                     main.post {
                         ready.addLast(file)
                         pump()

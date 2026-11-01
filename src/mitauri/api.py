@@ -22,6 +22,7 @@ from .config import API_PORT, LOCATION_TIMEOUT_SECONDS, load_token  # noqa: F401
 PORT = API_PORT
 LINK = re.compile(r"https?://\S+")
 SENTENCE = re.compile(r"(.+?(?:[.!?…]+(?=\s)|\n))", re.DOTALL)
+FIRST_CLAUSE = re.compile(r"(.{25,}?[,;])\s+", re.DOTALL)
 MAX_RECORDING_BYTES = 4 * 1024 * 1024  # two minutes of 16 kHz mono audio, or a large photo
 DELIVERY_TIMEOUT_SECONDS = 15
 STOP_COMMANDS = {"stop", "stopp", "halt", "aus", "ruhe", "alarm aus", "wecker aus", "stop alarm", "stopp den wecker", "ich bin wach"}
@@ -58,6 +59,10 @@ class _PhoneStream:
     def __init__(self, response: web.StreamResponse):
         self._response = response
         self._open = True
+
+    @property
+    def is_open(self) -> bool:
+        return self._open
 
     async def send(self, event: dict) -> None:
         if self._open:
@@ -98,10 +103,14 @@ def speakable(text: str) -> str:
 
 
 class SentenceSplitter:
-    """Cuts streamed text into sentences. A sentence only ends at whitespace, so 9.15 stays whole."""
+    """Cuts streamed text into sentences. A sentence only ends at whitespace, so 9.15 stays whole.
+
+    A long first sentence is also cut at a comma, because the voice starts sooner on a shorter piece.
+    """
 
     def __init__(self):
         self._buffer = ""
+        self._started = False
 
     def feed(self, text: str) -> list[str]:
         self._buffer += text
@@ -109,7 +118,12 @@ class SentenceSplitter:
         while match := SENTENCE.match(self._buffer):
             sentences.append(match.group(1))
             self._buffer = self._buffer[match.end():]
-        return [s for s in map(speakable, sentences) if s]
+        if not sentences and not self._started and (clause := FIRST_CLAUSE.match(self._buffer)):
+            sentences.append(clause.group(1))
+            self._buffer = self._buffer[clause.end():]
+        pieces = [s for s in map(speakable, sentences) if s]
+        self._started = self._started or bool(pieces)
+        return pieces
 
     def flush(self) -> list[str]:
         rest, self._buffer = speakable(self._buffer), ""
@@ -400,7 +414,9 @@ class Api:
 
     async def _on_voice(self, request: web.Request) -> web.StreamResponse:
         """Streams one JSON line per event, so the phone can speak before the reply is complete."""
+        started = time.monotonic()
         transcript, language = await asyncio.to_thread(self._speech.transcribe, await request.read())
+        heard = time.monotonic() - started
         response = web.StreamResponse(headers={"Content-Type": "application/x-ndjson"})
         await response.prepare(request)
         phone = _PhoneStream(response)
@@ -414,23 +430,45 @@ class Api:
             await phone.send({"door": True})
         elif transcript:
             splitter = SentenceSplitter()
+            phrases: asyncio.Queue[str | None] = asyncio.Queue()
+            # Voices are made while Claude is still writing, and travel with the text to save a second request.
+            speaker = asyncio.create_task(self._send_voices(phone, phrases, language))
+            first_words = None
             # Speech never gets a send permission until voices are recognised, so nobody nearby can send as the user.
             async with self._turn:
                 try:
                     # Runs to the end even if the phone hangs up, so the conversation stays consistent.
                     async for piece in self._brain.stream(transcript, spoken=True):
+                        if first_words is None and piece.strip():
+                            first_words = time.monotonic() - started
                         reply += piece
                         for sentence in splitter.feed(piece):
-                            await phone.send({"sentence": sentence})
+                            phrases.put_nowait(sentence)
                     for sentence in splitter.flush():
-                        await phone.send({"sentence": sentence})
+                        phrases.put_nowait(sentence)
                     self._remember(transcript, reply.strip())
                 except BrainError as error:
                     reply = f"Something went wrong: {error}"
-                    await phone.send({"sentence": reply})
+                    phrases.put_nowait(reply)
+                finally:
+                    phrases.put_nowait(None)
+            await speaker
+            log.info("Voice timing: heard in %.2f s, first words at %.2f s, all done at %.2f s",
+                     heard, first_words or 0, time.monotonic() - started)
         await phone.send({"reply": reply.strip()})
         await phone.finish()
         return response
+
+    async def _send_voices(self, phone: _PhoneStream, phrases: asyncio.Queue, language: str) -> None:
+        while (phrase := await phrases.get()) is not None:
+            event = {"sentence": phrase}
+            if phone.is_open:
+                try:
+                    audio = await asyncio.to_thread(self._speech.synthesize, phrase, language)
+                    event["audio"] = base64.b64encode(audio).decode()
+                except Exception:
+                    log.exception("Couldn't make the voice, so the phone will ask for it")  # it uses /speak then
+                await phone.send(event)
 
     async def _on_speak(self, request: web.Request) -> web.Response:
         try:

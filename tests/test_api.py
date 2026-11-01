@@ -2,20 +2,22 @@ import asyncio
 import base64
 import json
 import secrets
+import sys
 import time
 from pathlib import Path
 
+import numpy as np
 from aiohttp import ClientSession
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from mitauri import api as api_module
 from mitauri import tools
-from mitauri.api import Api, is_door_command, load_token
+from mitauri.api import Api, SentenceSplitter, is_door_command, load_token
 from mitauri.auth import Devices, device_id, signed_message
 from mitauri.brain import BrainError
 from mitauri.memory import Memory
-from mitauri.speech import choose_language
+from mitauri.speech import Speech, choose_language, only_speech
 
 PORT = 18766
 BASE = f"http://127.0.0.1:{PORT}"
@@ -627,9 +629,86 @@ def test_voice_returns_transcript_and_reply(tmp_path):
         response = await session.post(f"{BASE}/voice", data=b"audio", headers=signed("POST", "/voice", b"audio"))
         events = [json.loads(line) for line in (await response.read()).splitlines()]
         assert events[0] == {"transcript": "hallo", "language": "de"}
-        assert [e["sentence"] for e in events if "sentence" in e] == ["Um 9.15 gibt es Tee.", "Hier: Ende"]
+        spoken = [e for e in events if "sentence" in e]
+        assert [e["sentence"] for e in spoken] == ["Um 9.15 gibt es Tee.", "Hier: Ende"]
+        assert [base64.b64decode(e["audio"]).decode() for e in spoken] == ["de:Um 9.15 gibt es Tee.", "de:Hier: Ende"]
         assert events[-1] == {"reply": "Um 9.15 gibt es Tee. Hier: https://x.de/a Ende"}
     with_api(test, tmp_path)
+
+
+def test_first_long_sentence_is_cut_at_a_comma_so_the_voice_starts_sooner():
+    splitter = SentenceSplitter()
+    assert splitter.feed("Jo, 28 Tage. ") == ["Jo, 28 Tage."]
+    splitter = SentenceSplitter()
+    assert splitter.feed("Morgen wird es in Dortmund regnen, ") == ["Morgen wird es in Dortmund regnen,"]
+    assert splitter.feed("also nimm einen Schirm, wirklich mit") == []
+    assert splitter.flush() == ["also nimm einen Schirm, wirklich mit"]
+    splitter = SentenceSplitter()
+    assert splitter.feed("Das kostet ungefähr 3,50 Euro pro Stück") == []
+
+
+def test_voice_failure_still_sends_the_text_so_the_phone_can_fall_back(tmp_path):
+    class NoVoice(FakeSpeech):
+        def synthesize(self, text, language):
+            raise RuntimeError("voice broke")
+
+    async def run():
+        devices = Devices(tmp_path)
+        assert devices.pair(devices.new_code(), PUBLIC_B64, "test")
+        api = Api(CountingBrain(), "secret", tmp_path, NoVoice())
+        await api.start(["127.0.0.1"], PORT)
+        try:
+            async with ClientSession() as session:
+                response = await session.post(f"{BASE}/voice", data=b"a", headers=signed("POST", "/voice", b"a"))
+                events = [json.loads(line) for line in (await response.read()).splitlines()]
+        finally:
+            await api.stop()
+        spoken = [e for e in events if "sentence" in e]
+        assert [e["sentence"] for e in spoken] == ["answer"] and "audio" not in spoken[0]
+        assert events[-1] == {"reply": "answer"}
+    asyncio.run(run())
+
+
+def test_silence_is_not_heard_as_words():
+    assert only_speech(np.zeros(16_000, dtype=np.float32)).size == 0
+    assert only_speech(np.zeros(0, dtype=np.float32)).size == 0
+
+
+def test_short_clips_go_to_whisper_and_longer_ones_to_parakeet(tmp_path, monkeypatch):
+    class Segment:
+        text = "whisper"
+
+    class Whisper:
+        def transcribe(self, audio, **_):
+            return [Segment()], None
+
+    class Parakeet:
+        def recognize(self, audio, sample_rate):
+            return "parakeet"
+
+    speech = Speech(tmp_path)
+    speech._whisper, speech._parakeet = Whisper(), Parakeet()
+    monkeypatch.setattr("mitauri.speech.only_speech", lambda audio: audio)
+    assert speech.transcribe(b"\0\0" * 16_000)[0] == "whisper"
+    assert speech.transcribe(b"\0\0" * 48_000)[0] == "parakeet"
+    monkeypatch.setattr("mitauri.speech.only_speech", lambda audio: audio[:0])
+    assert speech.transcribe(b"\0\0" * 48_000)[0] == ""
+
+
+def test_whisper_takes_over_when_parakeet_cant_load(tmp_path, monkeypatch):
+    class Segment:
+        text = " hallo "
+
+    class Whisper:
+        def transcribe(self, audio, **_):
+            return [Segment()], None
+
+    speech = Speech(tmp_path)
+    speech._whisper = Whisper()
+    speech._parakeet_failed = False
+    monkeypatch.setitem(sys.modules, "onnx_asr", None)  # importing it now fails
+    assert speech._load_parakeet() is None
+    assert speech.transcribe(b"\0\0" * 100) == ("hallo", "de")
 
 
 def test_silence_skips_claude(tmp_path):
