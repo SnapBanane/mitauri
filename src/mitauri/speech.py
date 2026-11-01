@@ -1,6 +1,8 @@
-"""Speech recognition and voices. The voices always run locally.
+"""Speech recognition and voices.
 
-With MITAURI_GROQ_API_KEY set, Groq hears instead, which means recordings leave this machine. Only the part of a
+With MITAURI_GROQ_API_KEY set, Groq hears and speaks, which means recordings and replies leave this machine. Its
+voice is English even for German text, by the user's choice. Piper speaks whenever Groq can't, and always for alarms,
+which must not depend on the internet or a daily limit. Only the part of a
 clip with speech in it is sent. Local recognition takes over whenever Groq fails, and stays unloaded until then to
 free its memory for the voices.
 
@@ -32,6 +34,10 @@ SAMPLE_RATE = 16_000
 CONFIDENT_LANGUAGE = 0.8
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_MODEL = "whisper-large-v3"
+GROQ_SPEECH_URL = "https://api.groq.com/openai/v1/audio/speech"
+GROQ_VOICE_MODEL = "canopylabs/orpheus-v1-english"
+GROQ_MAX_VOICE_CHARS = 200  # assumed: the docs don't state it, and longer pieces go to Piper rather than fail
+GROQ_MAX_REST_SECONDS = 3600
 GROQ_TIMEOUT_SECONDS = 3.0
 GROQ_REST_SECONDS = 60  # after a failure, so an outage doesn't add the timeout to every request
 PARAKEET_MODEL = "nemo-parakeet-tdt-0.6b-v3"
@@ -85,6 +91,7 @@ class Speech:
         self._groq_key = key if engine == "groq" else ""
         self._groq_client = httpx.Client(timeout=GROQ_TIMEOUT_SECONDS)
         self._groq_rests_until = 0.0
+        self._groq_voice_rests_until = 0.0
         self._whisper = None
         self._detector = None
         self._voices = {}
@@ -166,8 +173,36 @@ class Speech:
         language, confidence, ranked = self._load_detector().detect_language(audio)
         return choose_language(language, confidence, dict(ranked))
 
+    def speak(self, text: str, language: str) -> bytes:
+        """Returns WAV audio of a reply, from Groq if it can."""
+        if self._groq_key and len(text) <= GROQ_MAX_VOICE_CHARS and time.monotonic() >= self._groq_voice_rests_until:
+            try:
+                response = self._groq_client.post(
+                    GROQ_SPEECH_URL,
+                    headers={"Authorization": f"Bearer {self._groq_key}"},
+                    json={
+                        "model": GROQ_VOICE_MODEL, "input": text, "response_format": "wav",
+                        "voice": os.environ.get("MITAURI_GROQ_VOICE", "troy"),
+                    },
+                )
+                response.raise_for_status()
+                if response.content[:4] != b"RIFF":
+                    raise ValueError("not WAV audio")
+                return response.content
+            except (httpx.HTTPError, ValueError) as error:
+                rest = GROQ_REST_SECONDS
+                status = type(error).__name__
+                if isinstance(error, httpx.HTTPStatusError):
+                    status = error.response.status_code
+                    retry_after = error.response.headers.get("retry-after", "")
+                    if retry_after.isdigit():  # the daily limit can last much longer than the usual rest
+                        rest = min(max(rest, int(retry_after)), GROQ_MAX_REST_SECONDS)
+                self._groq_voice_rests_until = time.monotonic() + rest
+                log.warning("Groq's voice failed (%s), so Piper speaks for the next %s s", status, rest)
+        return self.synthesize(text, language)
+
     def synthesize(self, text: str, language: str) -> bytes:
-        """Returns WAV audio, using the English voice for languages without their own."""
+        """Returns WAV audio from Piper, using the English voice for languages without their own."""
         buffer = io.BytesIO()
         with self._speaking:
             voice = self._load_voice(language if language in VOICES else "en")

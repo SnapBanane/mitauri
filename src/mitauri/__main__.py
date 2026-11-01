@@ -236,7 +236,7 @@ def startup_summary(config, whisper_model: str, whisper_threads: int) -> str:
     wake_settings = wake.load_settings(config.data_dir)
     whisper = f"Whisper {whisper_model}, {whisper_threads} threads"
     hearing = {
-        "groq": f"Groq {GROQ_MODEL}, sends recordings to Groq, and {whisper} if it fails",
+        "groq": f"Groq {GROQ_MODEL}, sends recordings and replies to Groq, and {whisper} if it fails",
         "parakeet": f"Parakeet, and {whisper} for short clips",
     }.get(speech_engine(), whisper)
     lines = [

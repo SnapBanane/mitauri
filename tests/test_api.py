@@ -7,6 +7,7 @@ import secrets
 import socket
 import sys
 import time
+import wave
 from pathlib import Path
 
 import httpx
@@ -66,6 +67,9 @@ class FakeSpeech:
 
     def synthesize(self, text: str, language: str) -> bytes:
         return f"{language}:{text}".encode()
+
+    def speak(self, text: str, language: str) -> bytes:
+        return self.synthesize(text, language)
 
 
 def with_api(test, tmp_path):
@@ -875,3 +879,51 @@ def test_naming_a_local_engine_means_groq_gets_nothing(tmp_path, monkeypatch):
     monkeypatch.setenv("MITAURI_GROQ_API_KEY", "key-value")
     monkeypatch.setenv("MITAURI_SPEECH_ENGINE", "whisper")
     assert Speech(tmp_path)._groq_key == ""
+
+
+def test_groq_speaks_replies_and_never_gets_called_when_too_long(tmp_path, monkeypatch):
+    sent = []
+
+    def handler(request):
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, content=b"RIFFaudio")
+
+    speech = groq_speech(tmp_path, monkeypatch, handler)
+    monkeypatch.setattr(speech, "synthesize", lambda text, language: b"piper")
+    assert speech.speak("Hallo", "de") == b"RIFFaudio"
+    assert sent[0]["input"] == "Hallo" and sent[0]["model"].endswith("english")
+    assert speech.speak("x" * 201, "de") == b"piper"
+    assert len(sent) == 1
+
+
+@pytest.mark.parametrize("response, rest", [
+    (httpx.Response(429, headers={"retry-after": "1800"}), 1800),
+    (httpx.Response(429, headers={"retry-after": "99999"}), 3600),
+    (httpx.Response(500), 60),
+    (httpx.Response(200, content=b"not audio"), 60),
+])
+def test_piper_speaks_when_groq_cant_and_groq_rests(tmp_path, monkeypatch, caplog, response, rest):
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return response
+
+    speech = groq_speech(tmp_path, monkeypatch, handler)
+    monkeypatch.setattr(speech, "synthesize", lambda text, language: b"piper")
+    started = time.monotonic()
+    assert speech.speak("geheim", "de") == b"piper"
+    assert speech.speak("geheim", "de") == b"piper"
+    assert len(calls) == 1
+    assert rest - 5 < speech._groq_voice_rests_until - started <= rest + 5
+    assert "geheim" not in caplog.text and "key-value" not in caplog.text
+
+
+def test_alarms_never_use_groq(tmp_path, monkeypatch):
+    def handler(request):
+        raise AssertionError("alarms stay local")
+
+    speech = groq_speech(tmp_path, monkeypatch, handler)
+    monkeypatch.setattr(speech, "_load_voice", lambda language: type("V", (), {"synthesize_wav": lambda self, text, out: out.writeframes(b"")})())
+    with pytest.raises(wave.Error):  # the stand-in voice sets no format, which proves Piper's path ran
+        speech.synthesize("Guten Morgen", "de")
