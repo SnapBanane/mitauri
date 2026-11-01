@@ -1,0 +1,6 @@
+[Unit]
+Description=Fetch Mitauri's encrypted daily backup from the server
+
+[Service]
+Type=oneshot
+ExecStart=%h/dev/mitauri/scripts/pull-backup.sh

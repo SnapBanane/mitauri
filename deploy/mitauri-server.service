@@ -1,0 +1,13 @@
+[Unit]
+Description=Mitauri personal assistant, the released version
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/current
+Environment=PATH=%h/.local/bin:/usr/bin
+ExecStart=%h/current/.venv/bin/mitauri run
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

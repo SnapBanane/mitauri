@@ -27,8 +27,8 @@ import numpy as np
 
 VOICE_ROOT = "https://huggingface.co/rhasspy/piper-voices/resolve/main"
 VOICES = {
-    "de": ("de/de_DE/thorsten/high", "de_DE-thorsten-high"),
-    "en": ("en/en_US/ryan/high", "en_US-ryan-high"),
+    "de": ("de/de_DE/thorsten", "de_DE-thorsten"),
+    "en": ("en/en_US/ryan", "en_US-ryan"),
 }
 WAITING = {"de": "Moment.", "en": "One moment."}  # said when Claude goes to a tool without a word
 SAMPLE_RATE = 16_000
@@ -51,6 +51,13 @@ def speech_engine() -> str:
     """Which engine hears: the one named in the settings, or Groq if there's a key, or Parakeet."""
     chosen = os.environ.get("MITAURI_SPEECH_ENGINE")
     return chosen or ("groq" if os.environ.get("MITAURI_GROQ_API_KEY") else "parakeet")
+
+
+def voice_files(language: str) -> tuple[str, str]:
+    """Where a voice lives. Medium is for small servers: a sentence took 3.15 s with high and 0.40 s with medium on 2 Arm cores."""
+    quality = "medium" if os.environ.get("MITAURI_VOICE_QUALITY") == "medium" else "high"
+    folder, name = VOICES[language]
+    return f"{folder}/{quality}", f"{name}-{quality}"
 
 
 def wav_bytes(audio: np.ndarray) -> bytes:
@@ -115,7 +122,7 @@ class Speech:
                     self._load_detector()
             for language in VOICES:
                 self.synthesize(WAITING[language], language)  # also has it ready in the cache
-            log.info("Speech models ready: %s and %s", self._engine.capitalize(), ", ".join(name for _, name in VOICES.values()))
+            log.info("Speech models ready: %s and %s", self._engine.capitalize(), ", ".join(voice_files(language)[1] for language in VOICES))
         except Exception:
             log.exception("Couldn't load the speech models; will retry on first use")
 
@@ -240,7 +247,7 @@ class Speech:
     def _load_voice(self, language: str):
         if language not in self._voices:
             from piper import PiperVoice
-            folder, name = VOICES[language]
+            folder, name = voice_files(language)
             self._voice_dir.mkdir(exist_ok=True)
             for suffix in (".onnx", ".onnx.json"):
                 path = self._voice_dir / f"{name}{suffix}"

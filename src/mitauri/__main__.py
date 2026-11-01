@@ -22,7 +22,7 @@ from .laptop_beacon import start_laptop_beacon
 from .presence import DEFAULT_SENSOR, Presence, beacon_key, load_key, parse_beacons, parse_sensors
 from .reminders import Reminders
 from .chat_memory import MODEL as SEARCH_MODEL
-from .speech import GROQ_MODEL, VOICES, WHISPER_THREADS, Speech, speech_engine
+from .speech import GROQ_MODEL, VOICES, WHISPER_THREADS, Speech, speech_engine, voice_files
 
 log = logging.getLogger(__name__)
 
@@ -298,7 +298,7 @@ def startup_summary(config, whisper_model: str, whisper_threads: int) -> str:
         f"  Hard problems:   {config.thinking_model}",
         f"  Self-building:   {os.environ.get('MITAURI_PROPOSAL_MODEL', 'opus')}",
         f"  Speech to text:  {hearing}, language {language}",
-        f"  Voices:          {', '.join(name for _, name in VOICES.values())}",
+        f"  Voices:          {', '.join(voice_files(language)[1] for language in VOICES)}",
         f"  Memory search:   {SEARCH_MODEL.split('/')[-1]} (loads on first search)",
         f"  Wake-up alarm:   {'on' if wake_settings['enabled'] else 'off'}",
         f"  Modules on:      {', '.join(enabled)}",

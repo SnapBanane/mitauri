@@ -314,6 +314,31 @@ to approve an install. Mitauri shows a notification when Android needs a tap. Se
 To update someone else's server, copy the APK and `output-metadata.json` to a folder there and run
 `uv run mitauri publish-update that-folder`. All phones must have the app from the same signing key.
 
+## Run it on a server
+
+The laptop is for developing and the server runs what you release. Nothing reaches the server until you run this
+from the laptop, and it needs a version tag:
+
+```bash
+scripts/release.sh v0.39
+```
+
+It runs the tests on the laptop, copies that tag to the server without the Android and firmware code, runs the tests
+again there and switches over. If the server doesn't come back up, it returns to the previous version by itself.
+Secrets don't travel with a release: `secrets.env` is only copied by hand, once.
+
+Don't run the laptop and the server at the same time with the same Discord token, or both will answer.
+
+The laptop also pulls a backup each day. The server encrypts it to a public key, so it can't read its own backups, and
+the backup's login can do nothing except fetch one. Fourteen days are kept, matching how long conversation logs live.
+
+```bash
+cp deploy/mitauri-backup.* ~/.config/systemd/user/ && systemctl --user enable --now mitauri-backup.timer
+```
+
+To restore, run `gpg -d <backup> | tar -x` in an empty folder. It asks for the passphrase of the `mitauri-backup` key,
+so keep that passphrase and the key somewhere other than this laptop as well.
+
 ## Connect Google Calendar and Tasks
 
 1. In the [Google Cloud console](https://console.cloud.google.com/), create a project and enable the

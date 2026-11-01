@@ -1,6 +1,8 @@
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).parent.parent
 SVG = ROOT / "assets" / "mitauri-logo.svg"
 DRAWABLE = ROOT / "android" / "app" / "src" / "main" / "res" / "drawable" / "logo_mitauri.xml"
@@ -32,6 +34,7 @@ def drawable_shapes():
     ]
 
 
+@pytest.mark.skipif(not DRAWABLE.exists(), reason="servers don't get the Android code")
 def test_app_logo_matches_the_svg():
     assert svg_shapes()
     assert svg_shapes() == drawable_shapes()

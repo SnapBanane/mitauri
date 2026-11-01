@@ -1,0 +1,10 @@
+[Unit]
+Description=Fetch Mitauri's backup once a day, or as soon as the laptop is next on
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target
