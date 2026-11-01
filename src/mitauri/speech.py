@@ -63,6 +63,28 @@ def wav_bytes(audio: np.ndarray) -> bytes:
     return buffer.getvalue()
 
 
+def with_real_length(audio: bytes) -> bytes:
+    """Groq streams its WAV, so the header claims 4 GB of audio, and Android's player refuses that."""
+    if audio[:4] != b"RIFF" or audio[8:12] != b"WAVE":
+        raise ValueError("not WAV audio")
+    position, fmt = 12, None
+    while position + 8 <= len(audio):
+        name, size = audio[position:position + 4], int.from_bytes(audio[position + 4:position + 8], "little")
+        body = audio[position + 8:]
+        if name == b"data":
+            if fmt is None:
+                break
+            frames = body[:size]
+            frames = frames[:len(frames) - len(frames) % 2]
+            sizes = (36 + len(frames)).to_bytes(4, "little")
+            return (b"RIFF" + sizes + b"WAVEfmt " + (16).to_bytes(4, "little") + fmt
+                    + b"data" + len(frames).to_bytes(4, "little") + frames)
+        if name == b"fmt ":
+            fmt = body[:16]
+        position += 8 + size + size % 2
+    raise ValueError("no audio in the WAV")
+
+
 def choose_language(language: str, confidence: float, scores: dict[str, float]) -> str:
     """Short clips can fool detection, so unless it's sure, pick between the languages with voices."""
     if confidence >= CONFIDENT_LANGUAGE:
@@ -186,9 +208,7 @@ class Speech:
                     },
                 )
                 response.raise_for_status()
-                if response.content[:4] != b"RIFF":
-                    raise ValueError("not WAV audio")
-                return response.content
+                return with_real_length(response.content)
             except (httpx.HTTPError, ValueError) as error:
                 rest = GROQ_REST_SECONDS
                 status = type(error).__name__

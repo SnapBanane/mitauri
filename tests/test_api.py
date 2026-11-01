@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import hashlib
+import io
 import json
 import os
 import secrets
@@ -24,7 +25,7 @@ from mitauri.api import Api, SentenceSplitter, is_door_command, load_token
 from mitauri.auth import Devices, device_id, signed_message
 from mitauri.brain import BrainError
 from mitauri.memory import Memory
-from mitauri.speech import Speech, choose_language, only_speech
+from mitauri.speech import Speech, choose_language, only_speech, with_real_length
 
 PORT = 18766
 BASE = f"http://127.0.0.1:{PORT}"
@@ -881,16 +882,35 @@ def test_naming_a_local_engine_means_groq_gets_nothing(tmp_path, monkeypatch):
     assert Speech(tmp_path)._groq_key == ""
 
 
+def groq_wav(frames: bytes) -> bytes:
+    """What Groq really sends: streamed, so both sizes are unknown, with a metadata chunk before the audio."""
+    fmt = (1).to_bytes(2, "little") + (1).to_bytes(2, "little") + (24_000).to_bytes(4, "little") + (48_000).to_bytes(4, "little") + (2).to_bytes(2, "little") + (16).to_bytes(2, "little")
+    unknown = b"\xff\xff\xff\xff"
+    info = b"INFOISFT" + (13).to_bytes(4, "little") + b"Lavf61.7.100\0\0"
+    return b"RIFF" + unknown + b"WAVEfmt " + (16).to_bytes(4, "little") + fmt + b"LIST" + (len(info)).to_bytes(4, "little") + info + b"data" + unknown + frames
+
+
+def test_streamed_wav_gets_its_real_length():
+    fixed = with_real_length(groq_wav(b"\1\0\2\0\3"))
+    assert int.from_bytes(fixed[4:8], "little") == 40 and fixed[36:40] == b"data"
+    with wave.open(io.BytesIO(fixed)) as played:
+        assert played.getnframes() == 2 and played.readframes(2) == b"\1\0\2\0"
+    for bad in (b"", b"not audio", b"RIFF\xff\xff\xff\xffWAVE"):
+        with pytest.raises(ValueError):
+            with_real_length(bad)
+
+
 def test_groq_speaks_replies_and_never_gets_called_when_too_long(tmp_path, monkeypatch):
     sent = []
 
     def handler(request):
         sent.append(json.loads(request.content))
-        return httpx.Response(200, content=b"RIFFaudio")
+        return httpx.Response(200, content=groq_wav(b"\1\0\2\0"))
 
     speech = groq_speech(tmp_path, monkeypatch, handler)
     monkeypatch.setattr(speech, "synthesize", lambda text, language: b"piper")
-    assert speech.speak("Hallo", "de") == b"RIFFaudio"
+    with wave.open(io.BytesIO(speech.speak("Hallo", "de"))) as played:
+        assert played.getnframes() == 2 and played.getframerate() == 24_000
     assert sent[0]["input"] == "Hallo" and sent[0]["model"].endswith("english")
     assert speech.speak("x" * 201, "de") == b"piper"
     assert len(sent) == 1
