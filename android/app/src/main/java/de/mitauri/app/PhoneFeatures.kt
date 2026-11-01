@@ -49,6 +49,7 @@ class NotificationWatcher : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         NotificationAccess.rememberApp(this, sbn.packageName)
+        WatchLink.onNotification(this, sbn)
         if (sbn.packageName in NotificationAccess.allowedApps(this) && !NotificationFilter.isProtectedApp(sbn.packageName)) {
             val own = OwnLines.fromNotification(sbn.notification.extras)
             if (own.isNotEmpty()) Mitauri.sendStyleLines(own)

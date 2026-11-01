@@ -40,8 +40,13 @@ GOING_AHEAD = {"ja", "jo", "jap", "ja bitte", "yes", "yep", "ok", "okay", "mach"
 MAX_SPEECH_CHARS = 2_000
 LOOPBACK = ("127.0.0.1", "::1")
 DEVICE = web.RequestKey("device", str)
-INTERNAL_PATHS = ("/location", "/door", "/notifications", "/reply", "/place-reminders", "/presence", "/alarm-notice", "/island")
+INTERNAL_PATHS = ("/location", "/door", "/notifications", "/reply", "/place-reminders", "/presence", "/alarm-notice", "/island", "/watch")
 MAX_REPLY_CHARS = 1_000
+MAX_WATCH_TITLE_CHARS = 40
+MAX_WATCH_TEXT_CHARS = 250
+MAX_WATCH_MESSAGES_PER_MINUTE = 10
+WATCH_BRIGHTNESS = (20, 100)
+WATCH_FACES = (1, 4)  # the faces seen on the wire
 JPEG_START = b"\xff\xd8\xff"
 
 log = logging.getLogger(__name__)
@@ -125,6 +130,7 @@ class Api:
         self._memory = memory
         self._style = StyleLearner(data_dir)
         self._may_send_once = False
+        self._watch_sends: list[float] = []
         self._learning = False
         self._turn = asyncio.Lock()  # one conversation turn at a time, so a send permission can't reach another turn
         self._phone: web.WebSocketResponse | None = None
@@ -147,6 +153,7 @@ class Api:
         app.router.add_post("/place-reminders", self._on_place_reminder)
         app.router.add_post("/alarm-notice", self._on_alarm_notice)
         app.router.add_post("/island", self._on_island)
+        app.router.add_post("/watch", self._on_watch)
         app.router.add_get("/presence", self._on_presence)
         app.router.add_get("/presence-key", self._on_presence_key)
         app.router.add_post("/photo", self._on_photo)
@@ -232,6 +239,8 @@ class Api:
         except (ValueError, KeyError, TypeError):
             raise web.HTTPBadRequest() from None
         record(self._data_dir, "module_changed", name=name, enabled=enabled)
+        if name == "watch" and self._phone is not None and not self._phone.closed:
+            await self._phone.send_json({"type": "watch_module", "enabled": enabled})
         return web.json_response(modules.listing(self._data_dir))
 
     async def _on_clear_history(self, _: web.Request) -> web.Response:
@@ -286,6 +295,8 @@ class Api:
             task = asyncio.create_task(self._answer(socket, data["id"], data["text"]))
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
+        elif data["type"] == "watch_module_query":
+            asyncio.create_task(socket.send_json({"type": "watch_module", "enabled": modules.is_enabled(self._data_dir, "watch")}))
         elif data["type"] == "stop_alarm":
             wake.request_stop(self._data_dir)
         elif data["type"] == "live_dismissed":
@@ -481,6 +492,39 @@ class Api:
         except (ValueError, KeyError, TypeError):
             raise web.HTTPBadRequest() from None
         return web.json_response({"delivered": await self.deliver("alarm_over" if over else "alarm", text)})
+
+    async def _on_watch(self, request: web.Request) -> web.Response:
+        """Only these actions exist: Claude can't reach the watch's raw commands, firmware or settings."""
+        if not modules.is_enabled(self._data_dir, "watch"):
+            return web.json_response({"error": "The watch module is switched off."}, status=403)
+        try:
+            data = await request.json()
+            action = str(data["action"])
+            if action == "status":
+                return await self._ask_phone("watch", action=action)
+            if action == "brightness":
+                value = int(data["percent"])
+                bounds = WATCH_BRIGHTNESS
+            elif action == "face":
+                value = int(data["face"])
+                bounds = WATCH_FACES
+            elif action == "notify":
+                title, text = str(data.get("title", "Mitauri")), str(data["text"])
+                if len(title) > MAX_WATCH_TITLE_CHARS or len(text) > MAX_WATCH_TEXT_CHARS or not text.strip():
+                    return web.json_response({"error": "That doesn't fit on the watch."}, status=400)
+                now = time.monotonic()
+                self._watch_sends = [sent for sent in self._watch_sends if now - sent < 60]
+                if len(self._watch_sends) >= MAX_WATCH_MESSAGES_PER_MINUTE:
+                    return web.json_response({"error": "Too many watch messages. Try again in a minute."}, status=429)
+                self._watch_sends.append(now)
+                return await self._ask_phone("watch", action=action, title=title, text=text)
+            else:
+                raise ValueError
+        except (ValueError, KeyError, TypeError, AttributeError):
+            raise web.HTTPBadRequest() from None
+        if not bounds[0] <= value <= bounds[1]:
+            return web.json_response({"error": f"Must be {bounds[0]} to {bounds[1]}."}, status=400)
+        return await self._ask_phone("watch", action=action, value=value)
 
     async def _on_presence(self, _: web.Request) -> web.Response:
         if self._presence is None:

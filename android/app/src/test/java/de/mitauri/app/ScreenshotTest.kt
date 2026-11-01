@@ -125,7 +125,7 @@ class ScreenshotTest {
                 SetupItem("Background location", "Choose Allow all the time", false, required = false) {},
                 SetupItem("Autostart", "On Xiaomi: turn on Autostart for Mitauri", null) {},
             ),
-            {}, {}, {}, {}, {}, {}, false, {}, {},
+            {}, {}, {}, {}, {}, {}, {}, false, {}, {},
         )
     }
 }

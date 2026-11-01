@@ -437,6 +437,60 @@ def test_modules_are_changed_only_by_the_paired_phone_and_door_commands_follow_t
     with_api(test, tmp_path)
 
 
+def test_watch_needs_the_internal_token_and_has_only_fixed_bounded_actions(tmp_path):
+    async def test(session):
+        async def status(body):
+            return (await session.post(f"{BASE}/watch", json=body, headers=INTERNAL)).status
+        assert (await session.post(f"{BASE}/watch", json={"action": "status"})).status == 401
+        assert await status({"action": "replay", "frame": "03ff"}) == 400
+        assert await status({"action": "firmware"}) == 400
+        assert await status({"action": "notify"}) == 400
+        assert await status({"action": "notify", "text": "   "}) == 400
+        assert await status({"action": "notify", "text": "x" * 251}) == 400
+        assert await status({"action": "notify", "text": "x", "title": "y" * 41}) == 400
+        assert await status({"action": "brightness", "percent": 0}) == 400
+        assert await status({"action": "brightness", "percent": "dark"}) == 400
+        assert await status({"action": "face", "face": 5}) == 400
+        assert await status({"action": "status"}) == 503  # no phone
+    with_api(test, tmp_path)
+
+
+def test_watch_message_reaches_the_phone_and_its_text_stays_out_of_the_audit_log(tmp_path):
+    async def test(session):
+        async with connect(session) as socket:
+            body = {"action": "notify", "text": "geheime Notiz"}
+            request = asyncio.create_task(session.post(f"{BASE}/watch", json=body, headers=INTERNAL))
+            event = await socket.receive_json()
+            assert (event["type"], event["action"], event["title"], event["text"]) == ("watch", "notify", "Mitauri", "geheime Notiz")
+            await socket.send_json({"type": "answer", "id": event["id"], "result": "done"})
+            assert (await (await request).json())["result"] == "done"
+    with_api(test, tmp_path)
+    assert "geheime" not in "".join(p.read_text(errors="ignore") for p in tmp_path.glob("audit*"))
+
+
+def test_watch_messages_are_rate_limited(tmp_path):
+    async def test(session):
+        answers = []
+        for _ in range(11):
+            response = await session.post(f"{BASE}/watch", json={"action": "notify", "text": "x"}, headers=INTERNAL)
+            answers.append(response.status)
+        assert answers == [503] * 10 + [429]
+    with_api(test, tmp_path)
+
+
+def test_switching_the_watch_module_off_stops_requests_and_tells_the_phone(tmp_path):
+    async def test(session):
+        async with connect(session) as socket:
+            await socket.send_json({"type": "watch_module_query"})
+            assert (await socket.receive_json()) == {"type": "watch_module", "enabled": True}
+            raw = json.dumps({"name": "watch", "enabled": False}).encode()
+            assert (await session.post(f"{BASE}/modules", data=raw, headers=signed("POST", "/modules", raw))).status == 200
+            assert (await socket.receive_json()) == {"type": "watch_module", "enabled": False}
+        response = await session.post(f"{BASE}/watch", json={"action": "status"}, headers=INTERNAL)
+        assert response.status == 403
+    with_api(test, tmp_path)
+
+
 def test_countdown_reaches_the_phone_and_returns_after_reconnecting(tmp_path):
     async def test(session):
         body = {"action": "show", "title": "Pizza", "seconds": 600, "detail": "Ofen"}

@@ -17,6 +17,7 @@ dependencies = [
     "python-dotenv>=1",
     "google-api-python-client>=2",
     "google-auth-oauthlib>=1",
+    "bleak>=3,<4",
 ]
 
 [project.scripts]

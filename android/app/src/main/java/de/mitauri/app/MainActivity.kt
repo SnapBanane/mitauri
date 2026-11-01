@@ -106,6 +106,7 @@ class MainActivity : FragmentActivity() {
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
             refresh++
             PresenceBeacon.start(this)
+            WatchLink.start(this)
         }
     private var refresh by mutableIntStateOf(0)
     private var photoCaption = ""
@@ -129,6 +130,7 @@ class MainActivity : FragmentActivity() {
                     var showDoorLogin by remember { mutableStateOf(false) }
                     var showModules by remember { mutableStateOf(false) }
                     var showAutoMusic by remember { mutableStateOf(false) }
+                    var showWatch by remember { mutableStateOf(false) }
                     BackHandler(showSettings) {
                         when {
                             showMemories -> showMemories = false
@@ -136,6 +138,7 @@ class MainActivity : FragmentActivity() {
                             showDoorLogin -> showDoorLogin = false
                             showModules -> showModules = false
                             showAutoMusic -> showAutoMusic = false
+                            showWatch -> showWatch = false
                             else -> showSettings = false
                         }
                     }
@@ -146,6 +149,7 @@ class MainActivity : FragmentActivity() {
                         showDoorLogin -> DoorLoginScreen { showDoorLogin = false }
                         showModules -> ModulesScreen { showModules = false }
                         showAutoMusic -> AutoMusicScreen { showAutoMusic = false }
+                        showWatch -> WatchScreen(refresh, { askPermissions.launch(arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)) }) { showWatch = false }
                         showSettings -> SettingsScreen(
                             setupItems(refresh),
                             ::restartApp,
@@ -153,6 +157,7 @@ class MainActivity : FragmentActivity() {
                             { confirmIdentity("Notifications") { showNotifications = true } },
                             { confirmIdentity("Modules") { showModules = true } },
                             { showAutoMusic = true },
+                            { confirmIdentity("Watch") { showWatch = true } },
                             { confirmIdentity("Door login") { showDoorLogin = true } },
                             DoorLogin.isSet(this),
                             { confirmIdentity("Disconnect from this server") { Mitauri.unpair() } },

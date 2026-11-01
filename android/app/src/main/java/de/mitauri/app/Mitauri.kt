@@ -355,6 +355,7 @@ object Mitauri {
                     status = Status.CONNECTED
                     retryDelay = MIN_RETRY_MILLIS
                     if (!PresenceBeacon.hasKey(app)) fetchPresenceKey()
+                    webSocket.send(JSONObject().put("type", "watch_module_query").toString())
                 }
             }
         }
@@ -388,10 +389,19 @@ object Mitauri {
                                 LiveCountdown(data.getString("text"), data.getLong("until") * 1000, data.optString("detail")),
                             )
                             "live_clear" -> Island.clearLive()
-                            else -> Calls.notify(app, "Reminder", data.getString("text"))
+                            else -> {
+                                Calls.notify(app, "Reminder", data.getString("text"))
+                                WatchLink.show("Mitauri", data.getString("text"))
+                            }
                         }
                     }
                 }
+                "watch" -> safely {
+                    WatchLink.request(app, data) { answer ->
+                        webSocket.send(answer.put("type", "answer").put("id", data.getString("id")).toString())
+                    }
+                }
+                "watch_module" -> safely { WatchLink.setModuleEnabled(app, data.getBoolean("enabled")) }
                 "get_location" -> safely { sendLocation(webSocket, data.getString("id")) }
             }
         }

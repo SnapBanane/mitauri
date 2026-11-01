@@ -208,6 +208,18 @@ beacon's token changes every 5 minutes, and only your server has the key, so nob
 fake it. Sightings stay in memory and are never saved. Distance is rough, and being away looks the same as
 Bluetooth being off. Build and flash with `pio run -t upload` in that folder.
 
+## Watch
+
+The phone talks to an ACT307 (VeryFitPro / iDO) watch directly over Bluetooth, so VeryFitPro isn't needed: uninstall
+or force stop it, as the watch takes one connection at a time. Under Settings > Watch, find the watch, tap it, and pick
+which apps appear on it. Mitauri reminders appear there too, and Mitauri can show messages, read the battery, and change
+brightness and face when you ask. It only uses fixed commands: raw frames, firmware and factory reset can't be reached.
+
+The watch has no pairing or encryption, so anyone nearby with the right tools can read what's sent, and could also send
+things to the watch. Treat what it shows as unverified, and only turn on apps you're fine with that for. Banking,
+password and code apps are always blocked, and code-looking messages are hidden. `src/mitauri/watch.py` is the laptop's
+client and the protocol reference, and `WatchProtocol.kt` is its port. Both are tested against the same captured frames.
+
 ## Phone app
 
 The Android app in `android/` chats with Mitauri over Tailscale, stays connected in the background,

@@ -45,6 +45,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -349,6 +350,106 @@ fun NotificationAppsScreen(onBack: () -> Unit) {
                             { on ->
                                 NotificationAccess.setAllowed(context, app, on)
                                 allowed = NotificationAccess.allowedApps(context)
+                            },
+                            colors = switchColors(),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun WatchScreen(refresh: Int, onAskPermission: () -> Unit, onBack: () -> Unit) {
+    val context = LocalContext.current
+    var address by remember { mutableStateOf(WatchLink.address(context)) }
+    var found by remember { mutableStateOf(emptyList<FoundWatch>()) }
+    var scanning by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var allowed by remember { mutableStateOf(WatchLink.allowedApps(context)) }
+    val apps = remember { NotificationAccess.seenApps(context) }
+    val canRun = remember(refresh) { WatchLink.canRun(context) }
+    DisposableEffect(Unit) { onDispose { WatchLink.stopScan(context) } }
+    ScreenScaffold("Watch", onBack) {
+        Text(
+            "This watch has no pairing or encryption. Anyone nearby with the right tools could read what's sent to it, " +
+                "so only turn on apps you're fine with that for. Banking, password and code apps are always blocked.",
+            color = MitauriColors.Muted, style = MaterialTheme.typography.bodyMedium,
+        )
+        if (WatchLink.oldAppInstalled(context)) {
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "VeryFitPro is still installed. The watch only talks to one app at a time, so uninstall or force stop it.",
+                color = MitauriColors.Danger, style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        Spacer(Modifier.height(16.dp))
+        when {
+            !canRun -> Button(onAskPermission, Modifier.fillMaxWidth()) { Text("Allow Bluetooth") }
+            address == null -> {
+                Button(
+                    onClick = {
+                        found = emptyList()
+                        scanning = true
+                        WatchLink.scan(context, { results -> found = results }, { scanning = false })
+                    },
+                    Modifier.fillMaxWidth(), enabled = !scanning,
+                ) { Text(if (scanning) "Searching..." else "Find my watch") }
+                if (found.isNotEmpty()) {
+                    SectionLabel("Tap yours")
+                    Group {
+                        found.forEachIndexed { index, watch ->
+                            if (index > 0) Divider()
+                            ListRow(watch.name, "${watch.address}, signal ${watch.rssi}", onClick = {
+                                WatchLink.stopScan(context)
+                                WatchLink.link(context, watch.address)
+                                address = watch.address
+                            })
+                        }
+                    }
+                } else if (!scanning) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("Keep the watch awake and close to the phone.", color = MitauriColors.Muted, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+            else -> {
+                val state = if (WatchLink.connected) "Connected" + (WatchLink.battery?.let { ", battery $it%" } ?: "") else "Looking for the watch..."
+                Group {
+                    ListRow(state, address)
+                    Divider()
+                    ListRow("Send a test message", onClick = {
+                        message = "Sending..."
+                        WatchLink.show("Mitauri", "Hallo vom Handy!") { sent -> message = if (sent) "The watch accepted it." else "The watch didn't accept it." }
+                    })
+                    Divider()
+                    ListRow("Forget this watch", titleColor = MitauriColors.Danger, onClick = {
+                        WatchLink.forget(context)
+                        address = null
+                        message = null
+                    })
+                }
+                message?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, color = MitauriColors.Muted, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
+        SectionLabel("Show these apps on the watch")
+        if (!NotificationAccess.isEnabled(context)) {
+            Text("Needs notification access, under Settings > Notifications.", color = MitauriColors.Muted, style = MaterialTheme.typography.bodyMedium)
+        } else if (apps.isEmpty()) {
+            Text("Apps appear here once they've sent a notification.", color = MitauriColors.Muted, style = MaterialTheme.typography.bodyMedium)
+        } else {
+            Group {
+                apps.forEachIndexed { index, app ->
+                    if (index > 0) Divider()
+                    ListRow(NotificationAccess.appLabel(context, app)) {
+                        Switch(
+                            app in allowed,
+                            { on ->
+                                WatchLink.setAllowed(context, app, on)
+                                allowed = WatchLink.allowedApps(context)
                             },
                             colors = switchColors(),
                         )
@@ -767,6 +868,7 @@ fun SettingsScreen(
     onNotifications: () -> Unit,
     onModules: () -> Unit,
     onAutoMusic: () -> Unit,
+    onWatch: () -> Unit,
     onDoorLogin: () -> Unit,
     doorLoginSet: Boolean,
     onDisconnect: () -> Unit,
@@ -799,6 +901,8 @@ fun SettingsScreen(
         SectionLabel("Features")
         Group {
             ListRow("Auto music", "Start Spotify when your headphones connect", R.drawable.ic_settings, onClick = onAutoMusic) { Icon(R.drawable.ic_chevron, null, size = 20) }
+            Divider()
+            ListRow("Watch", "Connect your watch without its old app", R.drawable.ic_bell, onClick = onWatch) { Icon(R.drawable.ic_chevron, null, size = 20) }
             Divider()
             ListRow("Modules", "Switch features on and off", R.drawable.ic_settings, onClick = onModules) { Icon(R.drawable.ic_chevron, null, size = 20) }
         }
