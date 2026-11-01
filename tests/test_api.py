@@ -875,3 +875,181 @@ def test_naming_a_local_engine_means_groq_gets_nothing(tmp_path, monkeypatch):
     monkeypatch.setenv("MITAURI_GROQ_API_KEY", "key-value")
     monkeypatch.setenv("MITAURI_SPEECH_ENGINE", "whisper")
     assert Speech(tmp_path)._groq_key == ""
+
+
+class CountingSpeech(FakeSpeech):
+    def __init__(self):
+        self.heard = []
+
+    def transcribe(self, pcm):
+        self.heard.append(pcm)
+        return f"heard {len(pcm)}", "de"
+
+
+def with_counting_speech(test, tmp_path):
+    async def run():
+        devices = Devices(tmp_path)
+        assert devices.pair(devices.new_code(), PUBLIC_B64, "test")
+        speech, brain = CountingSpeech(), CountingBrain()
+        api = Api(brain, "secret", tmp_path, speech)
+        await api.start(["127.0.0.1"], PORT)
+        try:
+            async with ClientSession() as session:
+                async def post(path, body):
+                    response = await session.post(f"{BASE}{path}", data=body, headers=signed("POST", path, body))
+                    return response.status, await response.read()
+                await test(post, speech, brain)
+        finally:
+            await api.stop()
+    asyncio.run(run())
+
+
+def first_event(body):
+    return json.loads(body.splitlines()[0])
+
+
+def test_prepared_hearing_is_used_for_the_same_audio_plus_a_quiet_end(tmp_path):
+    async def test(post, speech, brain):
+        assert (await post("/voice-prepare", b"a" * 1000))[0] == 202
+        _, body = await post("/voice", b"a" * 1000 + b"\0" * 500)
+        assert first_event(body)["transcript"] == "heard 1000"
+        assert speech.heard == [b"a" * 1000]
+        assert brain.asked == 1
+    with_counting_speech(test, tmp_path)
+
+
+@pytest.mark.parametrize("final", [
+    b"b" * 1000 + b"\0" * 500,  # different audio
+    b"a" * 900,  # shorter than what was prepared
+    b"a" * 1000 + b"\0" * 32_001,  # kept talking for too long afterwards
+])
+def test_prepared_hearing_is_ignored_when_the_recording_differs(tmp_path, final):
+    async def test(post, speech, brain):
+        await post("/voice-prepare", b"a" * 1000)
+        _, body = await post("/voice", final)
+        assert first_event(body)["transcript"] == f"heard {len(final)}"
+    with_counting_speech(test, tmp_path)
+
+
+def test_prepared_hearing_is_only_good_for_one_recording(tmp_path):
+    async def test(post, speech, brain):
+        await post("/voice-prepare", b"a" * 1000)
+        await post("/voice", b"a" * 1000)
+        await post("/voice", b"a" * 1000)
+        assert len(speech.heard) == 2
+    with_counting_speech(test, tmp_path)
+
+
+def test_preparing_never_acts_on_what_it_heard(tmp_path):
+    async def run():
+        devices = Devices(tmp_path)
+        assert devices.pair(devices.new_code(), PUBLIC_B64, "test")
+
+        class Door(FakeSpeech):
+            def transcribe(self, pcm):
+                return "öffne die tür", "de"
+        brain = CountingBrain()
+        api = Api(brain, "secret", tmp_path, Door())
+        await api.start(["127.0.0.1"], PORT)
+        try:
+            async with ClientSession() as session:
+                response = await session.post(f"{BASE}/voice-prepare", data=b"a", headers=signed("POST", "/voice-prepare", b"a"))
+                assert response.status == 202 and await response.read() == b""
+                await asyncio.sleep(0.05)
+        finally:
+            await api.stop()
+        assert brain.asked == 0
+        assert "door_command" not in ((tmp_path / "audit.log").read_text() if (tmp_path / "audit.log").exists() else "")
+    asyncio.run(run())
+
+
+def test_preparing_needs_the_phones_signature_and_is_rate_limited(tmp_path):
+    async def test(post, speech, brain):
+        for index in range(api_module.MAX_PREPARES_PER_MINUTE + 3):
+            assert (await post("/voice-prepare", bytes([index]) * 10))[0] == 202
+        await asyncio.sleep(0.05)
+        assert len(speech.heard) == api_module.MAX_PREPARES_PER_MINUTE
+    with_counting_speech(test, tmp_path)
+
+    async def unsigned(session):
+        assert (await session.post(f"{BASE}/voice-prepare", data=b"a")).status == 401
+    with_api(unsigned, tmp_path)
+
+
+def test_a_slow_groq_answer_gets_raced_and_the_first_answer_wins(tmp_path, monkeypatch):
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        if len(calls) == 1:
+            time.sleep(0.5)
+            return httpx.Response(200, json={"text": "slow"})
+        return httpx.Response(200, json={"text": "fast"})
+
+    monkeypatch.setattr("mitauri.speech.GROQ_SECOND_TRY_SECONDS", 0.05)
+    speech = groq_speech(tmp_path, monkeypatch, handler)
+    assert speech.transcribe(b"\0\0" * 100)[0] == "fast"
+    assert len(calls) == 2
+
+
+def test_groq_that_never_answers_gives_way_to_local_hearing(tmp_path, monkeypatch):
+    class Segment:
+        text = "lokal"
+
+    class Whisper:
+        def transcribe(self, audio, **_):
+            return [Segment()], None
+
+    def handler(request):
+        time.sleep(0.4)
+        return httpx.Response(200, json={"text": "too late"})
+
+    monkeypatch.setattr("mitauri.speech.GROQ_SECOND_TRY_SECONDS", 0.02)
+    monkeypatch.setattr("mitauri.speech.GROQ_TIMEOUT_SECONDS", 0.05)
+    speech = groq_speech(tmp_path, monkeypatch, handler)
+    speech._whisper = Whisper()
+    assert speech.transcribe(b"\0\0" * 100)[0] == "lokal"
+    assert speech._groq_rests_until > time.monotonic()
+
+
+def test_a_single_failed_try_still_lets_the_other_one_answer(tmp_path, monkeypatch):
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        if len(calls) == 1:
+            time.sleep(0.1)
+            return httpx.Response(500)
+        time.sleep(0.2)
+        return httpx.Response(200, json={"text": "fine"})
+
+    monkeypatch.setattr("mitauri.speech.GROQ_SECOND_TRY_SECONDS", 0.02)
+    speech = groq_speech(tmp_path, monkeypatch, handler)
+    assert speech.transcribe(b"\0\0" * 100)[0] == "fine"
+    assert speech._groq_rests_until == 0.0
+
+
+def test_short_phrases_are_only_generated_once(tmp_path):
+    made = []
+
+    class Voice:
+        def synthesize_wav(self, text, output):
+            made.append(text)
+            output.setnchannels(1)
+            output.setsampwidth(2)
+            output.setframerate(22_050)
+            output.writeframes(b"\0\0")
+
+    speech = Speech(tmp_path)
+    speech._voices = {"de": Voice(), "en": Voice()}
+    first = speech.synthesize("Moment.", "de")
+    assert speech.synthesize("Moment.", "de") == first
+    assert made == ["Moment."]
+    speech.synthesize("Moment.", "en")
+    long = "x" * 61
+    speech.synthesize(long, "de")
+    speech.synthesize(long, "de")
+    assert made == ["Moment.", "Moment.", long, long]
+    for index in range(70):
+        speech.synthesize(str(index), "de")
+    assert len(speech._voice_cache) == 64

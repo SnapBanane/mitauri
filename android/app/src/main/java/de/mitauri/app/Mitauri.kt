@@ -267,6 +267,11 @@ object Mitauri {
         socket = client.newWebSocket(request, Listener())
     }
 
+    /** Lets the server start hearing during the pause. Call off the main thread. */
+    fun prepareVoice(pcm: ByteArray) {
+        client.newCall(signedRequest("voice-prepare", "POST", pcm).build()).execute().close()
+    }
+
     /** Sends a recording and passes on each event as it arrives. Call off the main thread. */
     fun askByVoice(pcm: ByteArray, onEvent: (JSONObject) -> Unit) {
         val request = signedRequest("voice", "POST", pcm).build()

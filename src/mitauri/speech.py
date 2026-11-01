@@ -15,6 +15,8 @@ import io
 import logging
 import os
 import threading
+from collections import OrderedDict
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import time
 import urllib.request
 import wave
@@ -29,10 +31,13 @@ VOICES = {
     "en": ("en/en_US/ryan/high", "en_US-ryan-high"),
 }
 SAMPLE_RATE = 16_000
+VOICE_CACHE_SIZE = 64  # phrases like "Moment, ich denke kurz nach" come back often, and stay in memory only
+VOICE_CACHE_MAX_CHARS = 60
 CONFIDENT_LANGUAGE = 0.8
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_MODEL = "whisper-large-v3"
 GROQ_TIMEOUT_SECONDS = 3.0
+GROQ_SECOND_TRY_SECONDS = 0.8  # it normally answers in 0.3 s but can take 3, so a slow answer gets raced
 GROQ_REST_SECONDS = 60  # after a failure, so an outage doesn't add the timeout to every request
 PARAKEET_MODEL = "nemo-parakeet-tdt-0.6b-v3"
 SHORT_CLIP_SECONDS = 2.0  # counts the bit of silence the filter keeps around the words
@@ -85,6 +90,8 @@ class Speech:
         self._groq_key = key if engine == "groq" else ""
         self._groq_client = httpx.Client(timeout=GROQ_TIMEOUT_SECONDS)
         self._groq_rests_until = 0.0
+        self._groq_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="groq")
+        self._voice_cache: OrderedDict[tuple[str, str], bytes] = OrderedDict()
         self._whisper = None
         self._detector = None
         self._voices = {}
@@ -120,25 +127,47 @@ class Speech:
                 language = self._detect_language(audio)
             return self._recognise(audio, language), language
 
+    def _groq_once(self, wav: bytes, language: str) -> str:
+        response = self._groq_client.post(
+            GROQ_URL,
+            headers={"Authorization": f"Bearer {self._groq_key}"},
+            files={"file": ("speech.wav", wav, "audio/wav")},
+            data={"model": GROQ_MODEL, "language": language, "response_format": "json", "temperature": "0"},
+        )
+        response.raise_for_status()
+        return response.json()["text"].strip()
+
     def _ask_groq(self, speech: np.ndarray, language: str) -> str | None:
         """Returns the text, or None if local recognition has to do it."""
         if time.monotonic() < self._groq_rests_until:
             return None
-        try:
-            response = self._groq_client.post(
-                GROQ_URL,
-                headers={"Authorization": f"Bearer {self._groq_key}"},
-                files={"file": ("speech.wav", wav_bytes(speech), "audio/wav")},
-                data={"model": GROQ_MODEL, "language": language, "response_format": "json", "temperature": "0"},
+        wav = wav_bytes(speech)
+        deadline = time.monotonic() + GROQ_TIMEOUT_SECONDS
+        running = {self._groq_pool.submit(self._groq_once, wav, language)}
+        second_try = False
+        failure: Exception | None = None
+        while running and failure is None:
+            left = deadline - time.monotonic()
+            done, running = wait(
+                running, timeout=max(0, GROQ_SECOND_TRY_SECONDS if not second_try else left), return_when=FIRST_COMPLETED,
             )
-            response.raise_for_status()
-            return response.json()["text"].strip()
-        except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as error:
-            self._groq_rests_until = time.monotonic() + GROQ_REST_SECONDS
-            # Only the kind of failure, as an error's text could carry what was said.
-            status = error.response.status_code if isinstance(error, httpx.HTTPStatusError) else type(error).__name__
-            log.warning("Groq failed (%s), so this machine hears for the next %s s", status, GROQ_REST_SECONDS)
-            return None
+            for future in done:
+                try:
+                    return future.result()
+                except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as error:
+                    if not running:
+                        failure = error
+            if not done:
+                if not second_try:
+                    second_try = True
+                    running.add(self._groq_pool.submit(self._groq_once, wav, language))
+                else:
+                    failure = TimeoutError()
+        self._groq_rests_until = time.monotonic() + GROQ_REST_SECONDS
+        # Only the kind of failure, as an error's text could carry what was said.
+        status = failure.response.status_code if isinstance(failure, httpx.HTTPStatusError) else type(failure).__name__
+        log.warning("Groq failed (%s), so this machine hears for the next %s s", status, GROQ_REST_SECONDS)
+        return None
 
     def _recognise(self, audio: np.ndarray, language: str = "de") -> str:
         if self._groq_key:
@@ -169,11 +198,20 @@ class Speech:
     def synthesize(self, text: str, language: str) -> bytes:
         """Returns WAV audio, using the English voice for languages without their own."""
         buffer = io.BytesIO()
+        key = (language, text)
         with self._speaking:
+            if key in self._voice_cache:
+                self._voice_cache.move_to_end(key)
+                return self._voice_cache[key]
             voice = self._load_voice(language if language in VOICES else "en")
             with wave.open(buffer, "wb") as output:
                 voice.synthesize_wav(text, output)
-        return buffer.getvalue()
+            audio = buffer.getvalue()
+            if len(text) <= VOICE_CACHE_MAX_CHARS:
+                self._voice_cache[key] = audio
+                if len(self._voice_cache) > VOICE_CACHE_SIZE:
+                    self._voice_cache.popitem(last=False)
+        return audio
 
     def _load_parakeet(self):
         if self._parakeet is None and not self._parakeet_failed:

@@ -11,7 +11,9 @@ import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Base64
+import android.util.Log
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.Executors
@@ -22,6 +24,7 @@ object VoiceMode {
     private const val SAMPLE_RATE = 16_000
     private const val FRAME_SAMPLES = 480 // 30 ms
     private const val END_SILENCE_FRAMES = 20 // 0.6 s
+    private const val PREPARE_SILENCE_FRAMES = 8 // 0.24 s: the rest of the wait hides the time hearing takes
     private const val NO_SPEECH_FRAMES = 200 // 6 s
     private const val MAX_FRAMES = 1000 // 30 s
     private const val SPEECH_START_FRAMES = 3
@@ -154,6 +157,7 @@ object VoiceMode {
                 if (loudStreak >= SPEECH_START_FRAMES) speaking = true
                 silence = if (loud) 0 else silence + 1
                 if (speaking && silence >= END_SILENCE_FRAMES) break
+                if (speaking && silence == PREPARE_SILENCE_FRAMES) prepare(output.toByteArray())
                 if (!speaking && frames >= NO_SPEECH_FRAMES) return null
             }
         } finally {
@@ -163,10 +167,20 @@ object VoiceMode {
         return if (speaking && current == session) output.toByteArray() else null
     }
 
+    // On the same thread as the recording itself, so the server always gets them in this order.
+    private fun prepare(pcm: ByteArray) = network.execute {
+        try {
+            Mitauri.prepareVoice(pcm)
+        } catch (_: Exception) {
+            // Only saves time. The recording that follows still gets heard.
+        }
+    }
+
     private fun send(app: Context, recording: ByteArray, current: Int) {
+        val ended = SystemClock.elapsedRealtime()
         Island.update(IslandMode.THINKING, "Thinking")
         val conversation = afterExchange
-        val playback = Playback(app, current, conversation?.let { next -> { next(true) } })
+        val playback = Playback(app, current, conversation?.let { next -> { next(true) } }, ended)
         network.execute {
             try {
                 var language = "en"
@@ -174,6 +188,7 @@ object VoiceMode {
                 Mitauri.askByVoice(recording) { event ->
                     when {
                         event.has("transcript") -> {
+                            Log.i("Mitauri", "Voice timing: heard ${SystemClock.elapsedRealtime() - ended} ms after recording")
                             language = event.getString("language")
                             val heard = event.getString("transcript")
                             main.post {
@@ -211,7 +226,9 @@ object VoiceMode {
         private val app: Context,
         private val current: Int,
         private val then: (() -> Unit)? = null,
+        private val ended: Long? = null,
     ) {
+        private var loggedStart = false
         private val ready = ArrayDeque<File>()
         private var added = 0
         private var played = 0
@@ -284,6 +301,10 @@ object VoiceMode {
                     setDataSource(file.path)
                     prepare()
                     start()
+                    if (ended != null && !loggedStart) {
+                        loggedStart = true
+                        Log.i("Mitauri", "Voice timing: speaking ${SystemClock.elapsedRealtime() - ended} ms after recording")
+                    }
                 } catch (_: Exception) {
                     // Audio that can't be played shouldn't crash the app. The answer is still in the chat.
                     failed = true

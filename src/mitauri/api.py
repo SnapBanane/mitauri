@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import hashlib
 import hmac
 import json
 import logging
@@ -39,6 +40,9 @@ SEND_COMMAND = re.compile(
 ASKING_FOR_ADVICE = re.compile(r"(?i)\b(soll ich|sollte ich|should i|what would)\b")
 GOING_AHEAD = {"ja", "jo", "jap", "ja bitte", "yes", "yep", "ok", "okay", "mach", "mach das", "mach mal", "schick", "schick es", "send it"}
 MAX_SPEECH_CHARS = 2_000
+PREPARED_MAX_TAIL_BYTES = 32_000  # 1 s of audio: what the phone may record after preparing, all of it quiet
+PREPARED_MAX_AGE_SECONDS = 30
+MAX_PREPARES_PER_MINUTE = 8  # each one can reach Groq, which allows 20 requests a minute
 LOOPBACK = ("127.0.0.1", "::1")
 DEVICE = web.RequestKey("device", str)
 INTERNAL_PATHS = ("/location", "/door", "/notifications", "/reply", "/place-reminders", "/presence", "/alarm-notice", "/island", "/watch", "/app-update-notice")
@@ -146,6 +150,8 @@ class Api:
         self._may_send_once = False
         self._watch_sends: list[float] = []
         self._learning = False
+        self._prepared: tuple[bytes, int, float, asyncio.Task] | None = None
+        self._prepare_times: list[float] = []
         self._turn = asyncio.Lock()  # one conversation turn at a time, so a send permission can't reach another turn
         self._phone: web.WebSocketResponse | None = None
         self._pending: dict[str, asyncio.Future] = {}
@@ -172,6 +178,7 @@ class Api:
         app.router.add_get("/presence-key", self._on_presence_key)
         app.router.add_post("/photo", self._on_photo)
         app.router.add_post("/voice", self._on_voice)
+        app.router.add_post("/voice-prepare", self._on_voice_prepare)
         app.router.add_post("/speak", self._on_speak)
         app.router.add_get("/app-update", self._on_app_update)
         app.router.add_get("/app-update/apk", self._on_app_update_apk)
@@ -433,10 +440,41 @@ class Api:
         await phone.send_json({"type": "update_available"})
         return web.json_response({"told_phone": True})
 
+    async def _on_voice_prepare(self, request: web.Request) -> web.Response:
+        """Starts hearing during the pause at the end of a sentence. Only /voice ever acts on the result."""
+        pcm = await request.read()
+        now = time.monotonic()
+        self._prepare_times = [t for t in self._prepare_times if now - t < 60]
+        if pcm and len(self._prepare_times) < MAX_PREPARES_PER_MINUTE:
+            self._prepare_times.append(now)
+            task = asyncio.create_task(asyncio.to_thread(self._speech.transcribe, pcm))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+            task.add_done_callback(lambda done: done.cancelled() or done.exception())  # /voice hears again if it failed
+            self._prepared = (hashlib.sha256(pcm).digest(), len(pcm), now, task)
+        return web.Response(status=202)
+
+    async def _hear(self, pcm: bytes) -> tuple[str, str]:
+        """Uses what was prepared, if this recording is that audio plus the short quiet end."""
+        prepared, self._prepared = self._prepared, None
+        if prepared:
+            digest, size, when, task = prepared
+            usable = (
+                time.monotonic() - when < PREPARED_MAX_AGE_SECONDS
+                and 0 <= len(pcm) - size <= PREPARED_MAX_TAIL_BYTES
+                and hashlib.sha256(pcm[:size]).digest() == digest
+            )
+            if usable:
+                try:
+                    return await task
+                except Exception:
+                    log.warning("Preparing failed, so this recording is heard again")
+        return await asyncio.to_thread(self._speech.transcribe, pcm)
+
     async def _on_voice(self, request: web.Request) -> web.StreamResponse:
         """Streams one JSON line per event, so the phone can speak before the reply is complete."""
         started = time.monotonic()
-        transcript, language = await asyncio.to_thread(self._speech.transcribe, await request.read())
+        transcript, language = await self._hear(await request.read())
         heard = time.monotonic() - started
         response = web.StreamResponse(headers={"Content-Type": "application/x-ndjson"})
         await response.prepare(request)
