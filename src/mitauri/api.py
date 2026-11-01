@@ -18,11 +18,12 @@ from aiohttp import WSMsgType, web
 from . import app_update, instant, modules, style, wake
 from .audit import record
 from .auth import Devices, FailureLimiter
-from .brain import BrainError
+from .brain import TOOL_CALL, BrainError
 from .presence import load_key
 from .reminders import Reminders
 from .style import StyleLearner
 from .config import API_PORT, LOCATION_TIMEOUT_SECONDS, load_token  # noqa: F401
+from .speech import WAITING
 
 PORT = API_PORT
 LINK = re.compile(r"https?://\S+")
@@ -570,6 +571,13 @@ class Api:
                 try:
                     # Runs to the end even if the phone hangs up, so the conversation stays consistent.
                     async for piece in self._brain.stream(self._with_instant_notes(transcript), spoken=True):
+                        if piece is TOOL_CALL:
+                            # Tools and the thinking after them take seconds, so the user hears something meanwhile.
+                            # It's only spoken, because it isn't part of Claude's reply.
+                            if first_words is None:
+                                first_words = time.monotonic() - started
+                                phrases.put_nowait(WAITING.get(language, WAITING["en"]))
+                            continue
                         if first_words is None and piece.strip():
                             first_words = time.monotonic() - started
                         reply += piece

@@ -261,7 +261,7 @@ request falls back to local Whisper. Without a key, nothing but text leaves your
 Whisper for clips under two seconds, and Piper for the voice. All run locally and are downloaded on first
 start, about 1.1 GB in all, and recognition needs about 2 GB of memory. If it hears worse than before, set
 `MITAURI_SPEECH_ENGINE=whisper`, which is slower. The server log's `Voice timing` lines show how long
-each reply took. Your
+each reply took. If Claude goes to a tool without saying anything, Mitauri says "Moment." right then. Your
 words still go to Claude as text. Voice mode doesn't run over the lock screen.
 
 ## Update the phone app

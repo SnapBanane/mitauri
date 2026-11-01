@@ -23,7 +23,7 @@ from mitauri.reminders import Reminders
 from mitauri import tools
 from mitauri.api import Api, SentenceSplitter, is_door_command, load_token
 from mitauri.auth import Devices, device_id, signed_message
-from mitauri.brain import BrainError
+from mitauri.brain import TOOL_CALL, BrainError
 from mitauri.memory import Memory
 from mitauri.speech import Speech, choose_language, only_speech
 
@@ -642,6 +642,37 @@ def test_voice_returns_transcript_and_reply(tmp_path):
         assert [base64.b64decode(e["audio"]).decode() for e in spoken] == ["de:Um 9.15 gibt es Tee.", "de:Hier: Ende"]
         assert events[-1] == {"reply": "Um 9.15 gibt es Tee. Hier: https://x.de/a Ende"}
     with_api(test, tmp_path)
+
+
+def voice_events_for(tmp_path, pieces):
+    class Brain(FakeBrain):
+        async def stream(self, text, spoken=False):
+            for piece in pieces:
+                yield piece
+
+    async def run():
+        devices = Devices(tmp_path)
+        assert devices.pair(devices.new_code(), PUBLIC_B64, "test")
+        api = Api(Brain(), "secret", tmp_path, FakeSpeech())
+        await api.start(["127.0.0.1"], PORT)
+        try:
+            async with ClientSession() as session:
+                response = await session.post(f"{BASE}/voice", data=b"a", headers=signed("POST", "/voice", b"a"))
+                return [json.loads(line) for line in (await response.read()).splitlines()]
+        finally:
+            await api.stop()
+    return asyncio.run(run())
+
+
+def test_a_silent_tool_call_is_filled_once_and_stays_out_of_the_reply(tmp_path):
+    events = voice_events_for(tmp_path, [TOOL_CALL, TOOL_CALL, "Um neun. "])
+    assert [e["sentence"] for e in events if "sentence" in e] == ["Moment.", "Um neun."]
+    assert events[-1]["reply"] == "Um neun."
+
+
+def test_nothing_is_added_when_claude_speaks_before_its_tool(tmp_path):
+    events = voice_events_for(tmp_path, ["Ich schau mal. ", TOOL_CALL, "Um neun. "])
+    assert [e["sentence"] for e in events if "sentence" in e] == ["Ich schau mal.", "Um neun."]
 
 
 def test_first_long_sentence_is_cut_at_a_comma_so_the_voice_starts_sooner():

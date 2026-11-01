@@ -80,6 +80,14 @@ class BrainError(Exception):
     pass
 
 
+class _ToolCall(str):
+    pass
+
+
+# Yielded when Claude starts a tool before saying anything. It's empty, so it adds nothing to the reply text.
+TOOL_CALL = _ToolCall()
+
+
 class Brain:
     """Talks to Claude through the Claude Code CLI, so it runs on the user's subscription.
 
@@ -188,6 +196,8 @@ class Brain:
                 inner = event["event"]
                 if inner.get("type") == "content_block_start" and has_text:
                     yield "\n"  # text after a tool call starts a new thought
+                elif inner.get("type") == "content_block_start" and inner.get("content_block", {}).get("type") == "tool_use":
+                    yield TOOL_CALL
                 elif inner.get("type") == "content_block_delta" and inner["delta"].get("type") == "text_delta":
                     has_text = True
                     yield inner["delta"]["text"]

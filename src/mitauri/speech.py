@@ -30,6 +30,7 @@ VOICES = {
     "de": ("de/de_DE/thorsten/high", "de_DE-thorsten-high"),
     "en": ("en/en_US/ryan/high", "en_US-ryan-high"),
 }
+WAITING = {"de": "Moment.", "en": "One moment."}  # said when Claude goes to a tool without a word
 SAMPLE_RATE = 16_000
 VOICE_CACHE_SIZE = 64  # phrases like "Moment, ich denke kurz nach" come back often, and stay in memory only
 VOICE_CACHE_MAX_CHARS = 60
@@ -113,7 +114,7 @@ class Speech:
                 if os.environ.get("MITAURI_SPEECH_LANGUAGE") == "auto":
                     self._load_detector()
             for language in VOICES:
-                self.synthesize("Hallo.", language)
+                self.synthesize(WAITING[language], language)  # also has it ready in the cache
             log.info("Speech models ready: %s and %s", self._engine.capitalize(), ", ".join(name for _, name in VOICES.values()))
         except Exception:
             log.exception("Couldn't load the speech models; will retry on first use")

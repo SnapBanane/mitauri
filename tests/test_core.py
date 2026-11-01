@@ -21,7 +21,7 @@ import pytest
 from mitauri.bot import MAX_MESSAGE_LENGTH, MitauriBot, briefing_due, is_from_owner, split_message
 from mitauri.reminders import CALL, TRIP, Reminders
 from mitauri.tools import route_url
-from mitauri.brain import Brain, BrainError, prune_transcripts, transcript_dir
+from mitauri.brain import TOOL_CALL, Brain, BrainError, prune_transcripts, transcript_dir
 from mitauri import toolbox
 from mitauri.modules import places as places_module
 from mitauri import geo, proposals, research, stocks, tools, transit, untis, wake, wake_planner, weather
@@ -253,6 +253,21 @@ def test_stream_separates_text_around_tool_calls_and_saves_session(tmp_path):
 
     assert asyncio.run(go()) == ["Hi ", "\n", "there"]
     assert (tmp_path / "session.txt").read_text() == "s2"
+
+
+def test_stream_reports_a_tool_call_only_before_any_words(tmp_path):
+    tool = event(type="stream_event", event={"type": "content_block_start", "content_block": {"type": "tool_use"}})
+    script = "\n".join([tool, delta("Hi"), tool, event(type="result", is_error=False, session_id="s2")])
+    brain = make_brain(tmp_path, script)
+
+    async def go():
+        try:
+            return [piece async for piece in brain.stream("x", spoken=True)]
+        finally:
+            await brain.close()
+
+    pieces = asyncio.run(go())
+    assert pieces[0] is TOOL_CALL and pieces[1:] == ["Hi", "\n"]
 
 
 def test_lock_down_makes_existing_files_private(tmp_path):
