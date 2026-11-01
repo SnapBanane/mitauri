@@ -15,6 +15,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import java.nio.ByteBuffer
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
@@ -121,9 +122,11 @@ object SensorListener {
     private val tick = object : Runnable {
         override fun run() {
             val context = app ?: return
-            ensureScanning(context)
+            // Reported before restarting, so a scan that failed during the last minute shows up as not listening.
+            Log.i("Mitauri", "Sensor scan: listening=$scanning heard=${heard.size}")
             Mitauri.sendPresenceReport(scanning, heard.toMap())
             heard.clear()
+            restartScan(context)
             main.postDelayed(this, REPORT_MILLIS)
         }
     }
@@ -151,12 +154,11 @@ object SensorListener {
     private fun scanner(context: Context) = adapter(context)?.takeIf { it.isEnabled }?.bluetoothLeScanner
 
     @SuppressLint("MissingPermission")
-    private fun ensureScanning(context: Context) {
-        if (!canRun(context) || adapter(context)?.isEnabled != true) {
-            scanning = false
-            return
-        }
-        if (scanning) return
+    private fun restartScan(context: Context) {
+        // MIUI quietly cuts off long background scans without telling the app, so each minute starts a fresh one.
+        if (scanning && canRun(context)) scanner(context)?.stopScan(callback)
+        scanning = false
+        if (!canRun(context)) return
         val scanner = scanner(context) ?: return
         // A scan with a filter is the kind Android keeps delivering while the screen is off.
         val mask = ByteArray(SensorBeacon.PAYLOAD_BYTES).also { it[0] = -1; it[1] = -1 }
