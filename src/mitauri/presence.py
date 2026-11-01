@@ -188,6 +188,13 @@ class Presence:
             sensors[name] = {who: self._beacon_status(name, who, now) for who in {"phone", *self._reporters}}
         return {"sensors": sensors}
 
+    def reporters(self, now: float | None = None) -> dict[str, dict]:
+        now = time.time() if now is None else now
+        return {
+            name: {"seconds_ago": round(now - reported), "listening": listening}
+            for name, (reported, listening) in self._reporters.items()
+        }
+
     def watch_serial(self, port: str, sensor: str = DEFAULT_SENSOR) -> None:
         self._heartbeats.setdefault(sensor, 0.0)
         threading.Thread(target=self._read_forever, args=(port, sensor), daemon=True).start()

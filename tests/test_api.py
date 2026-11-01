@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 import os
 import secrets
 import socket
@@ -18,7 +19,8 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from mitauri import api as api_module
-from mitauri import app_update, instant, listener, modules
+from mitauri import app_update, dashboard, instant, listener, modules
+from mitauri.audit import record
 from mitauri.reminders import Reminders
 from mitauri import tools
 from mitauri.api import Api, SentenceSplitter, is_door_command, load_token
@@ -1265,3 +1267,152 @@ def test_door_phrases_are_never_instant_and_still_go_to_the_phone(tmp_path):
 def test_tests_cannot_reach_the_real_data_folder():
     from mitauri.config import data_dir
     assert data_dir() != Path("~/.local/share/mitauri").expanduser()
+
+
+def test_dashboard_shows_nothing_without_a_login(tmp_path):
+    async def test(session):
+        page = await session.get(f"{BASE}/dashboard")
+        assert page.status == 200
+        assert "script-src 'self'" in page.headers["Content-Security-Policy"]
+        assert (await session.get(f"{BASE}/dashboard/page.js")).status == 200
+        assert (await session.get(f"{BASE}/dashboard/status")).status == 401
+        assert (await session.post(f"{BASE}/dashboard/logout")).status == 401
+        # An old cookie isn't a lockout, or the page would lock out a phone on the same address.
+        for _ in range(12):
+            refused = await session.get(f"{BASE}/dashboard/status", headers={"Cookie": f"{dashboard.COOKIE}=old"})
+            assert refused.status == 401
+        assert (await session.get(f"{BASE}/dashboard")).status == 200
+    with_api(test, tmp_path)
+
+
+def test_dashboard_login_works_once_and_marks_the_cookie(tmp_path):
+    code = dashboard.Access(tmp_path).new_code()
+
+    async def test(session):
+        assert (await session.post(f"{BASE}/dashboard/login", json={"code": "wrong"})).status == 401
+        login = await session.post(f"{BASE}/dashboard/login", json={"code": code})
+        assert login.status == 200
+        cookie = login.cookies[dashboard.COOKIE]
+        assert cookie["httponly"] and cookie["samesite"] == "Strict" and cookie["path"] == "/dashboard"
+        header = {"Cookie": f"{dashboard.COOKIE}={cookie.value}"}
+        assert (await session.post(f"{BASE}/dashboard/login", json={"code": code})).status == 401
+        assert (await session.get(f"{BASE}/dashboard/status", headers=header)).status == 200
+        assert (await session.post(f"{BASE}/dashboard/logout", headers=header)).status == 200
+        assert (await session.get(f"{BASE}/dashboard/status", headers=header)).status == 401
+    with_api(test, tmp_path)
+
+
+def test_dashboard_session_opens_nothing_else(tmp_path):
+    token = dashboard.Access(tmp_path).login(dashboard.Access(tmp_path).new_code())
+
+    async def test(session):
+        header = {"Cookie": f"{dashboard.COOKIE}={token}"}
+        for method, path in (("POST", "/door"), ("GET", "/location"), ("GET", "/memories"), ("GET", "/presence-key")):
+            assert (await session.request(method, f"{BASE}{path}", headers=header)).status == 401
+    with_api(test, tmp_path)
+
+
+def test_dashboard_code_dies_after_wrong_tries_and_expiry(tmp_path):
+    access = dashboard.Access(tmp_path)
+    code = access.new_code()
+    for _ in range(dashboard.CODE_ATTEMPTS):
+        assert access.login("wrong") is None
+    assert access.login(code) is None
+    code = access.new_code()
+    state = json.loads((tmp_path / "dashboard_code.json").read_text())
+    assert code not in json.dumps(state)
+    (tmp_path / "dashboard_code.json").write_text(json.dumps({**state, "expires": 0}))
+    assert access.login(code) is None
+    token = access.login(access.new_code())
+    assert token not in (tmp_path / "dashboard_sessions.json").read_text()
+    assert access.is_valid(token)
+    access.revoke_all()
+    assert not access.is_valid(token)
+
+
+class FakeDashboardPhone:
+    closed = False
+
+    def __init__(self, api):
+        self.api = api
+        self.asked = []
+
+    async def send_json(self, message):
+        self.asked.append(message["type"])
+        answer = (
+            {"latitude": 48.18123, "longitude": 11.71654, "accuracy": 12.0}
+            if message["type"] == "get_location" else {"linked": True, "connected": True, "battery_percent": 11}
+        )
+        self.api._pending[message["id"]].set_result({"type": "x", "id": message["id"], **answer})
+
+
+def test_dashboard_asks_the_phone_while_viewed_and_forgets_after(tmp_path, monkeypatch):
+    async def run():
+        api = Api(FakeBrain(), "secret", tmp_path, FakeSpeech(), Memory(tmp_path / "memory.db"))
+        api._phone = FakeDashboardPhone(api)
+        monkeypatch.setattr(api_module, "DASHBOARD_REFRESH_SECONDS", 0.01)
+        monkeypatch.setattr(api_module, "DASHBOARD_VIEWER_GONE_SECONDS", 0.05)
+        token = dashboard.Access(tmp_path).login(dashboard.Access(tmp_path).new_code())
+        header = {"Cookie": f"{dashboard.COOKIE}={token}"}
+        await api.start(["127.0.0.1"], PORT)
+        try:
+            async with ClientSession() as session:
+                await asyncio.sleep(0.03)
+                assert api._phone.asked == []  # nobody is looking yet
+                await (await session.get(f"{BASE}/dashboard/status", headers=header)).read()
+                await asyncio.sleep(0.005)
+                status = await (await session.get(f"{BASE}/dashboard/status", headers=header)).json()
+                assert status["phone"]["location"]["latitude"] == 48.18123
+                assert status["watch"]["battery_percent"] == 11
+                assert "The watch battery is at 11%." in status["issues"]
+                await asyncio.sleep(0.15)
+                assert api._phone_facts == {}
+                seen = len(api._phone.asked)
+                await asyncio.sleep(0.05)
+                assert len(api._phone.asked) == seen  # it stopped asking
+        finally:
+            await api.stop()
+        saved = "".join(p.read_text(errors="replace") for p in tmp_path.iterdir() if p.suffix in (".log", ".json"))
+        assert "48.18" not in saved  # no location history
+    asyncio.run(run())
+
+
+def test_dashboard_lists_problems_without_exception_text(tmp_path):
+    record(tmp_path, "auth_rejected", address="100.1.2.3")
+    record(tmp_path, "tool", name="get_weather", ok=False)
+    record(tmp_path, "tool", name="get_time", ok=True)
+    (tmp_path / "claude-errors.log").write_text("first\nusage limit reached\n")
+    feed = dashboard.ErrorFeed()
+    logger = logging.getLogger("mitauri.test_feed")
+    logger.addHandler(feed)
+    try:
+        raise ValueError("private message text")
+    except ValueError:
+        logger.exception("Voice failed")
+    finally:
+        logger.removeHandler(feed)
+    texts = [problem["text"] for problem in dashboard.recent_problems(tmp_path, feed, time.time())]
+    assert "Refused a request from 100.1.2.3" in texts and "Tool get_weather failed" in texts
+    assert "usage limit reached" in texts and "Voice failed (ValueError)" in texts
+    assert not any("get_time" in text or "private" in text for text in texts)
+    later = dashboard.audit_problems(tmp_path, time.time() + 2 * dashboard.PROBLEM_WINDOW_SECONDS)
+    assert later == []
+
+
+def test_dashboard_attention_ignores_away_but_not_silent_sensors():
+    status = {
+        "phone": {"connected": True, "location": {}}, "watch": {"linked": False},
+        "server": {"disk_free_percent": 50, "discord": True},
+        "sensors": {"home": {"phone": {"state": "away"}, "laptop": {"state": "near"}}},
+    }
+    assert dashboard.needs_attention(status) == []
+    status["sensors"] = {"home": {"state": "unknown", "reason": "This sensor isn't reporting."}}
+    status["phone"]["connected"] = False
+    assert dashboard.needs_attention(status) == [
+        "The phone app isn't connected.", "Sensor home: This sensor isn't reporting.",
+    ]
+
+
+def test_dashboard_page_writes_outside_text_only_as_text():
+    script = (Path(dashboard.__file__).parent / "page.js").read_text()
+    assert "innerHTML" not in script and "insertAdjacentHTML" not in script and "document.write" not in script

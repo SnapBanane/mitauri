@@ -11,11 +11,12 @@ import re
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from aiohttp import WSMsgType, web
 
-from . import app_update, instant, modules, style, wake
+from . import app_update, dashboard, instant, modules, style, wake
 from .audit import record
 from .auth import Devices, FailureLimiter
 from .brain import TOOL_CALL, BrainError
@@ -60,6 +61,9 @@ MAX_WATCH_MESSAGES_PER_MINUTE = 10
 WATCH_BRIGHTNESS = (20, 100)
 WATCH_FACES = (1, 4)  # the faces seen on the wire
 JPEG_START = b"\xff\xd8\xff"
+DASHBOARD_FOLDER = Path(dashboard.__file__).parent
+DASHBOARD_REFRESH_SECONDS = 60  # each refresh wakes the phone's GPS and the watch's Bluetooth
+DASHBOARD_VIEWER_GONE_SECONDS = 30
 
 log = logging.getLogger(__name__)
 
@@ -165,6 +169,15 @@ class Api:
         self._pending: dict[str, asyncio.Future] = {}
         self._tasks: set[asyncio.Task] = set()
         self._runner: web.AppRunner | None = None
+        self._dashboard = dashboard.Access(data_dir)
+        self._errors = dashboard.ErrorFeed()
+        self._started = time.time()
+        self._phone_since: float | None = None
+        self._phone_gone_at: float | None = None
+        self._phone_facts: dict[str, dict] = {}  # memory only, and emptied once nobody is looking
+        self._viewed_at = 0.0
+        self._refresher: asyncio.Task | None = None
+        self.discord_ready = None  # set by whoever runs the bot
 
     async def start(self, hosts: list[str], port: int = PORT) -> None:
         app = web.Application(middlewares=[self._guard], client_max_size=MAX_RECORDING_BYTES)
@@ -198,6 +211,13 @@ class Api:
         app.router.add_delete("/long-term-memory", self._on_clear_history)
         app.router.add_get("/modules", self._on_list_modules)
         app.router.add_post("/modules", self._on_set_module)
+        app.router.add_get("/dashboard", self._on_dashboard_file)
+        app.router.add_get("/dashboard/page.css", self._on_dashboard_file)
+        app.router.add_get("/dashboard/page.js", self._on_dashboard_file)
+        app.router.add_post("/dashboard/login", self._on_dashboard_login)
+        app.router.add_post("/dashboard/logout", self._on_dashboard_logout)
+        app.router.add_get("/dashboard/status", self._on_dashboard_status)
+        logging.getLogger().addHandler(self._errors)
         self._runner = web.AppRunner(app, access_log=None)  # who asked what is nobody's log's business
         await self._runner.setup()
         for host in hosts:
@@ -205,6 +225,9 @@ class Api:
         log.info("Phone connection listening on %s, port %s", ", ".join(hosts), port)
 
     async def stop(self) -> None:
+        logging.getLogger().removeHandler(self._errors)
+        if self._refresher:
+            self._refresher.cancel()
         if self._runner:
             await self._runner.cleanup()
 
@@ -214,6 +237,13 @@ class Api:
         if self._limiter.is_locked(address):
             raise web.HTTPTooManyRequests()
         if request.path == "/pair":
+            return await handler(request)
+        if request.path in dashboard.FILES or request.path == "/dashboard/login":
+            return await handler(request)
+        if request.path.startswith("/dashboard/"):
+            # Not counted as a failure: an old cookie is normal, and a session token is too long to guess.
+            if not self._dashboard.is_valid(request.cookies.get(dashboard.COOKIE, "")):
+                raise web.HTTPUnauthorized(headers=dashboard.HEADERS)
             return await handler(request)
         if request.path in INTERNAL_PATHS:
             # Only Mitauri's own tool process, on this machine, may ask the phone to do things.
@@ -299,6 +329,7 @@ class Api:
         socket = web.WebSocketResponse(max_msg_size=MAX_MESSAGE_CHARS * 4)  # the app pings rarely, to save battery
         await socket.prepare(request)
         self._phone = socket
+        self._phone_since = time.time()
         if self._live and self._live["until"] > time.time():
             await socket.send_json({
                 "type": "live_show", "id": "resend", "text": self._live["title"],
@@ -314,6 +345,7 @@ class Api:
                 log.warning("Ignored a malformed message from the phone")
         if self._phone is socket:
             self._phone = None
+            self._phone_gone_at = time.time()
         log.info("Phone disconnected")
         return socket
 
@@ -364,6 +396,7 @@ class Api:
                 reply = await self._brain.ask(self._with_instant_notes(text))
                 self._remember(text, reply)
             except BrainError as error:
+                log.warning("A chat reply failed")
                 reply = f"Something went wrong: {error}"
             finally:
                 self._may_send_once = False
@@ -417,6 +450,7 @@ class Api:
             try:
                 reply = await self._brain.ask(text or "Was siehst du auf diesem Bild?", image=("image/jpeg", encoded))
             except BrainError as error:
+                log.warning("A chat reply failed")
                 reply = f"Something went wrong: {error}"
         return web.json_response({"reply": reply})
 
@@ -590,6 +624,7 @@ class Api:
                         phrases.put_nowait(sentence)
                     self._remember(transcript, reply.strip())
                 except BrainError as error:
+                    log.warning("A chat reply failed")
                     reply = f"Something went wrong: {error}"
                     phrases.put_nowait(reply)
                 finally:
@@ -704,6 +739,98 @@ class Api:
         if self._presence is None:
             return web.json_response({"state": "unknown", "reason": "No presence sensor is set up."})
         return web.json_response(self._presence.status())
+
+    async def _on_dashboard_file(self, request: web.Request) -> web.FileResponse:
+        name, content_type = dashboard.FILES[request.path]
+        return web.FileResponse(DASHBOARD_FOLDER / name, headers={**dashboard.HEADERS, "Content-Type": content_type})
+
+    async def _on_dashboard_login(self, request: web.Request) -> web.Response:
+        address = request.remote or "unknown"
+        try:
+            token = self._dashboard.login(str((await request.json())["code"]))
+        except (ValueError, KeyError, TypeError):
+            token = None
+        if token is None:
+            self._reject(address)
+        record(self._data_dir, "dashboard_login", address=address)
+        response = web.json_response({"ok": True}, headers=dashboard.HEADERS)
+        # Not marked Secure: this is plain HTTP inside Tailscale, which encrypts it.
+        response.set_cookie(
+            dashboard.COOKIE, token, max_age=dashboard.SESSION_SECONDS, path="/dashboard", httponly=True, samesite="Strict",
+        )
+        return response
+
+    async def _on_dashboard_logout(self, request: web.Request) -> web.Response:
+        self._dashboard.logout(request.cookies[dashboard.COOKIE])
+        response = web.json_response({"ok": True}, headers=dashboard.HEADERS)
+        response.del_cookie(dashboard.COOKIE, path="/dashboard")
+        return response
+
+    async def _on_dashboard_status(self, _: web.Request) -> web.Response:
+        self._viewed_at = time.monotonic()
+        if self._refresher is None or self._refresher.done():
+            self._refresher = asyncio.create_task(self._refresh_phone_facts())
+        return web.json_response(self._dashboard_status(time.time()), headers=dashboard.HEADERS)
+
+    def _phone_connected(self) -> bool:
+        return self._phone is not None and not self._phone.closed
+
+    async def _refresh_phone_facts(self) -> None:
+        """Asks the phone only while a page is open. The answers are never written anywhere, and they go when it closes."""
+        try:
+            while time.monotonic() - self._viewed_at < DASHBOARD_VIEWER_GONE_SECONDS:
+                if self._phone_connected():
+                    await asyncio.gather(self._fetch_phone_location(), self._fetch_watch_status())
+                else:
+                    self._phone_facts = {}
+                await asyncio.sleep(DASHBOARD_REFRESH_SECONDS)
+        finally:
+            self._phone_facts = {}
+
+    async def _fetch_phone_location(self) -> None:
+        answer = await self._on_location_request(None)
+        self._phone_facts["location"] = {**json.loads(answer.text), "asked": time.time()}
+
+    async def _fetch_watch_status(self) -> None:
+        if modules.is_enabled(self._data_dir, "watch"):
+            answer = json.loads((await self._ask_phone("watch", action="status")).text)
+        else:
+            answer = {"linked": False}
+        self._phone_facts["watch"] = {**answer, "asked": time.time()}
+
+    def _dashboard_status(self, now: float) -> dict:
+        def fact(name: str) -> dict:
+            found = dict(self._phone_facts.get(name, {}))
+            if asked := found.pop("asked", None):
+                found["age_seconds"] = round(now - asked)
+            return found
+
+        presence = self._presence.status(now) if self._presence else {"sensors": {}}
+        status = {
+            "now": now,
+            "phone": {
+                "connected": self._phone_connected(), "since": self._phone_since,
+                "gone_at": self._phone_gone_at, "location": fact("location"),
+            },
+            "watch": fact("watch"),
+            "sensors": presence["sensors"],
+            "reporters": self._presence.reporters(now) if self._presence else {},
+            "devices": [
+                {"name": entry["name"], "listener": entry.get("listener")} for entry in self._devices.all().values()
+            ],
+            "server": {
+                **dashboard.host_health(self._data_dir),
+                "uptime_seconds": round(now - self._started),
+                "modules_off": [item["name"] for item in modules.listing(self._data_dir) if not item["enabled"]],
+            },
+            "problems": dashboard.recent_problems(self._data_dir, self._errors, now),
+        }
+        if self.discord_ready:
+            status["server"]["discord"] = self.discord_ready()
+        if hasattr(self._brain, "running"):
+            status["server"]["claude"] = self._brain.running
+        status["issues"] = dashboard.needs_attention(status)
+        return status
 
     async def _on_presence_key(self, request: web.Request) -> web.Response:
         record(self._data_dir, "presence_key_sent", device=request[DEVICE])

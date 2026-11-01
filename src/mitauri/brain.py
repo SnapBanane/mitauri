@@ -135,6 +135,10 @@ class Brain:
         async with self._lock:
             await self._ensure_process()
 
+    @property
+    def running(self) -> bool:
+        return self._process is not None and self._process.returncode is None
+
     async def close(self) -> None:
         async with self._lock:
             await self._stop_process()

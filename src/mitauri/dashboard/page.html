@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>mitauri status</title>
+<link rel="stylesheet" href="/dashboard/page.css">
+<script src="/dashboard/page.js" defer></script>
+</head>
+<body>
+<header>
+  <h1>mitauri</h1>
+  <span id="summary"></span>
+  <span id="updated"></span>
+  <button id="logout" type="button" hidden>sign out</button>
+</header>
+
+<form id="login" hidden>
+  <p>Run <code>mitauri dashboard</code> on the server and open the link it prints, or enter its code here.</p>
+  <input id="code" autocomplete="off" spellcheck="false" aria-label="Code">
+  <button type="submit">Sign in</button>
+  <p id="login-error" class="bad" hidden></p>
+</form>
+
+<main id="status" hidden>
+  <section id="attention" hidden>
+    <h2>Needs attention</h2>
+    <ul id="issues"></ul>
+  </section>
+  <section class="wide">
+    <h2>Distance to sensors</h2>
+    <table>
+      <thead><tr><th>Sensor</th><th>Device</th><th>State</th><th class="n">Distance</th><th class="n">Heard</th></tr></thead>
+      <tbody id="presence"></tbody>
+    </table>
+    <p class="note">Bluetooth distance is rough: walls and pockets change it by metres. Bluetooth being off looks like away.</p>
+  </section>
+  <section><h2>Phone</h2><dl id="phone"></dl></section>
+  <section><h2>Watch</h2><dl id="watch"></dl></section>
+  <section><h2>Server</h2><dl id="server"></dl></section>
+  <section><h2>Paired devices</h2><dl id="devices"></dl></section>
+  <section class="wide">
+    <h2>Errors, last 24 hours</h2>
+    <table>
+      <tbody id="problems"></tbody>
+    </table>
+  </section>
+</main>
+</body>
+</html>
