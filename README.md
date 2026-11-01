@@ -268,8 +268,8 @@ After one install by cable, the phone updates itself:
 
 Raise `versionCode` first, because phones only take a higher one. A connected phone fetches the new version
 straight away, and otherwise does so when it reconnects. It waits while the app is open or a call is running, and
-Android refuses anything not signed with your key. Android may ask you to confirm the first update, and shows a
-notification whenever it needs a tap. Settings > App has a button to check by hand.
+Android refuses anything not signed with your key. The first update needs "Install unknown apps" allowed for Mitauri, and Google Play Protect may ask you
+to approve an install. Mitauri shows a notification when Android needs a tap. Settings > App has a button to check by hand.
 
 To update someone else's server, copy the APK and `output-metadata.json` to a folder there and run
 `uv run mitauri publish-update that-folder`. All phones must have the app from the same signing key.
