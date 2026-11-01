@@ -1,3 +1,4 @@
+import dataclasses
 import asyncio
 import importlib.util
 import wave as wave_module
@@ -1259,3 +1260,17 @@ def test_leaving_reminders_ask_the_phone_to_watch_for_leaving(monkeypatch):
     monkeypatch.setattr(toolbox, "ask_server", fake)
     assert "Set." in tools.remind_at_place("Schlüssel", when_leaving=True)
     assert sent["leaving"] is True
+
+
+def test_everyday_model_answers_with_low_effort_unless_told_otherwise(tmp_path, monkeypatch):
+    config = Config(data_dir=tmp_path, timezone="Europe/Berlin", model="haiku", claude_bin="claude", **{
+        f.name: None for f in dataclasses.fields(Config)
+        if f.default is dataclasses.MISSING and f.name not in ("data_dir", "timezone", "model", "claude_bin")
+    })
+    brain = Brain(config, Memory(tmp_path / "memory.db"))
+    monkeypatch.delenv("MITAURI_EFFORT", raising=False)
+    command = brain._command(None, "prompt")
+    assert command[command.index("--effort") + 1] == "low"
+    monkeypatch.setenv("MITAURI_EFFORT", "high")
+    command = brain._command(None, "prompt")
+    assert command[command.index("--effort") + 1] == "high"

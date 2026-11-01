@@ -260,6 +260,9 @@ class Brain:
             "--input-format", "stream-json",
             "--output-format", "stream-json", "--verbose", "--include-partial-messages",
             "--model", self._config.model,
+            # Haiku otherwise thinks silently before its first word: 1.79 s against 1.28 s to start, measured.
+            # Hard problems still go to think_harder, which runs separately.
+            "--effort", os.environ.get("MITAURI_EFFORT", "low"),
             "--system-prompt", prompt,
             "--tools", "",
             "--strict-mcp-config", "--mcp-config", str(self._mcp_config),
