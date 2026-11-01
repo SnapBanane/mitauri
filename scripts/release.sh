@@ -49,7 +49,8 @@ systemctl --user restart mitauri
 for _ in $(seq 1 30); do
     if ss -tln | grep -q ':8766 '; then
         echo "$tag is running."
-        cd "$HOME/releases" && ls -1t | tail -n +4 | grep -vxF "$(basename "${previous:-none}")" | xargs -r rm -rf
+        cd "$HOME/releases"
+        ls -1t | tail -n +4 | { grep -vxF "$(basename "${previous:-none}")" || true; } | xargs -r rm -rf
         exit 0
     fi
     sleep 2

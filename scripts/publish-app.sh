@@ -11,4 +11,4 @@ build="$repo/android/app/build/outputs/apk/release"
 
 # Only the app and its description go across, and the signing key stays here.
 tar -C "$build" -c output-metadata.json "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["elements"][0]["outputFile"])' "$build/output-metadata.json")" \
-    | ssh -i "$key" "$server" "sudo -iu mitauri bash -c 'folder=\$(mktemp -d) && trap \"rm -rf \$folder\" EXIT && tar -x -C \$folder && ~/current/.venv/bin/mitauri publish-update \$folder'"
+    | ssh -i "$key" "$server" "cd /tmp && sudo -u mitauri env HOME=/home/mitauri bash -c 'folder=\$(mktemp -d) && trap \"rm -rf \$folder\" EXIT && tar -x -C \$folder && /home/mitauri/current/.venv/bin/mitauri publish-update \$folder'"
