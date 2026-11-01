@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from . import modules, proposals, wake
+from . import dashboard, modules, proposals, wake
 from .api import Api, load_token
 from .auth import Devices
 from .chat_memory import ChatMemory
@@ -35,6 +35,8 @@ def main() -> None:
     commands.add_parser("pair", help="show the details to enter in the phone app")
     pair_listener = commands.add_parser("pair-listener", help="show the command that connects a report-only computer")
     pair_listener.add_argument("name", help="what this computer is called in presence answers, such as laptop")
+    dashboard_command = commands.add_parser("dashboard", help="show a one-time link to the status page")
+    dashboard_command.add_argument("--revoke", action="store_true", help="sign out every browser instead")
     commands.add_parser("devices", help="list paired devices")
     commands.add_parser("unpair", help="remove a paired device").add_argument("device")
     module_command = commands.add_parser("modules", help="list modules, or switch one on or off")
@@ -73,6 +75,19 @@ def main() -> None:
             raise SystemExit("Use a short lowercase name other than phone.")
         print(f"On that computer, within 10 minutes, with the server running:\n"
               f"uv run mitauri-listener setup {host} {Devices(config.data_dir).new_code(listener=args.name)}")
+        return
+
+    if args.command == "dashboard":
+        access = dashboard.Access(config.data_dir)
+        if args.revoke:
+            access.revoke_all()
+            print("Every browser is signed out.")
+            return
+        host = os.environ.get("MITAURI_API_HOST")
+        if not host:
+            raise SystemExit("Set MITAURI_API_HOST in secrets.env to this device's Tailscale address first.")
+        print(f"http://{host}:{API_PORT}/dashboard#{access.new_code()}")
+        print("The link works once and expires in 10 minutes. The browser then stays signed in for 30 days.")
         return
 
     if args.command == "devices":
@@ -208,6 +223,7 @@ def main() -> None:
     history = ChatMemory(config.data_dir / "chat_memory.db")
     api = Api(brain, load_token(config.data_dir), config.data_dir, speech, memory, presence, history)
     bot = MitauriBot(int(user_id), Brain(config, memory, limited=True), reminders, config, api, brain, speech, memory)
+    api.discord_ready = lambda: bot.is_ready() and not bot.is_closed()
     try:
         asyncio.run(serve(bot, token, api, brain))
     except KeyboardInterrupt:

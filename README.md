@@ -236,6 +236,24 @@ things to the watch. Treat what it shows as unverified, and only turn on apps yo
 password and code apps are always blocked, and code-looking messages are hidden. `src/mitauri/watch.py` is the laptop's
 client and the protocol reference, and `WatchProtocol.kt` is its port. Both are tested against the same captured frames.
 
+## Status page
+
+A read-only page showing how far the phone and laptop are from each sensor, the phone's location, the watch's battery,
+server health and recent errors. It refreshes every 5 seconds and needs nothing installed.
+
+```bash
+uv run mitauri dashboard           # prints a link that works once, within 10 minutes
+uv run mitauri dashboard --revoke  # signs out every browser
+```
+
+Open the link on any device on your tailnet. That browser stays signed in for 30 days. The page can't change anything,
+and others on the tailnet can't see past its login.
+
+While a tab is open and visible, the server asks the phone for its location and the watch's status once a minute, which
+uses some battery. It keeps the answers in memory only and drops them about a minute after the tab closes, so no location
+history builds up; the audit log only notes that the location was asked for. The map link opens OpenStreetMap, which then
+sees those coordinates, and only when you click it.
+
 ## Phone app
 
 The Android app in `android/` chats with Mitauri over Tailscale, stays connected in the background,
