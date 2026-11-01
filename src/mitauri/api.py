@@ -485,7 +485,7 @@ class Api:
             event = {"sentence": phrase}
             if phone.is_open:
                 try:
-                    audio = await asyncio.to_thread(self._speech.speak, phrase, language)
+                    audio = await asyncio.to_thread(self._speech.synthesize, phrase, language)
                     event["audio"] = base64.b64encode(audio).decode()
                 except Exception:
                     log.exception("Couldn't make the voice, so the phone will ask for it")  # it uses /speak then
@@ -499,7 +499,7 @@ class Api:
             raise web.HTTPBadRequest() from None
         if len(text) > MAX_SPEECH_CHARS:
             raise web.HTTPRequestEntityTooLarge(max_size=MAX_SPEECH_CHARS, actual_size=len(text))
-        audio = await asyncio.to_thread(self._speech.speak, text, language)
+        audio = await asyncio.to_thread(self._speech.synthesize, text, language)
         return web.Response(body=audio, content_type="audio/wav")
 
     async def _ask_phone(self, kind: str, **fields) -> web.Response:
