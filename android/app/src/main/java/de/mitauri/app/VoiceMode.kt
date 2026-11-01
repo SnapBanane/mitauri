@@ -185,6 +185,7 @@ object VoiceMode {
             try {
                 var language = "en"
                 var answered = false
+                var firstVoice = false
                 Mitauri.askByVoice(recording) { event ->
                     when {
                         event.has("transcript") -> {
@@ -197,11 +198,17 @@ object VoiceMode {
                             }
                         }
                         event.has("door") -> main.post { DoorOpener.command(app) }
-                        event.has("sentence") -> playback.add(
-                            event.getString("sentence"),
-                            language,
-                            event.optString("audio").takeIf { it.isNotEmpty() }?.let { Base64.decode(it, Base64.DEFAULT) },
-                        )
+                        event.has("sentence") -> {
+                            if (!firstVoice) {
+                                firstVoice = true
+                                Log.i("Mitauri", "Voice timing: first voice arrived ${SystemClock.elapsedRealtime() - ended} ms after recording")
+                            }
+                            playback.add(
+                                event.getString("sentence"),
+                                language,
+                                event.optString("audio").takeIf { it.isNotEmpty() }?.let { Base64.decode(it, Base64.DEFAULT) },
+                            )
+                        }
                         event.has("reply") -> {
                             answered = true
                             val reply = event.getString("reply")
@@ -326,7 +333,8 @@ object VoiceMode {
     }
 
     private val speechAttributes = AudioAttributes.Builder()
-        .setUsage(AudioAttributes.USAGE_ASSISTANT)
+        // Not USAGE_ASSISTANT: that has its own volume, which the phone's buttons don't change.
+        .setUsage(AudioAttributes.USAGE_MEDIA)
         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
         .build()
 
