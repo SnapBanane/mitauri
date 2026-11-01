@@ -11,7 +11,7 @@ import uuid
 
 from aiohttp import WSMsgType, web
 
-from . import modules, style, wake
+from . import app_update, modules, style, wake
 from .audit import record
 from .auth import Devices, FailureLimiter
 from .brain import BrainError
@@ -41,7 +41,7 @@ GOING_AHEAD = {"ja", "jo", "jap", "ja bitte", "yes", "yep", "ok", "okay", "mach"
 MAX_SPEECH_CHARS = 2_000
 LOOPBACK = ("127.0.0.1", "::1")
 DEVICE = web.RequestKey("device", str)
-INTERNAL_PATHS = ("/location", "/door", "/notifications", "/reply", "/place-reminders", "/presence", "/alarm-notice", "/island", "/watch")
+INTERNAL_PATHS = ("/location", "/door", "/notifications", "/reply", "/place-reminders", "/presence", "/alarm-notice", "/island", "/watch", "/app-update-notice")
 MAX_REPLY_CHARS = 1_000
 MAX_WATCH_TITLE_CHARS = 40
 MAX_WATCH_TEXT_CHARS = 250
@@ -173,6 +173,9 @@ class Api:
         app.router.add_post("/photo", self._on_photo)
         app.router.add_post("/voice", self._on_voice)
         app.router.add_post("/speak", self._on_speak)
+        app.router.add_get("/app-update", self._on_app_update)
+        app.router.add_get("/app-update/apk", self._on_app_update_apk)
+        app.router.add_post("/app-update-notice", self._on_app_update_notice)
         app.router.add_get("/memories", self._on_list_memories)
         app.router.add_delete("/memories/{id:[0-9]+}", self._on_delete_memory)
         app.router.add_post("/conversation/reset", self._on_reset_conversation)
@@ -411,6 +414,24 @@ class Api:
             return False
         finally:
             del self._pending[delivery_id]
+
+    async def _on_app_update(self, _: web.Request) -> web.Response:
+        return web.json_response(app_update.latest(self._data_dir) or {})
+
+    async def _on_app_update_apk(self, request: web.Request) -> web.StreamResponse:
+        path = app_update.apk_path(self._data_dir)
+        if not path.exists():
+            raise web.HTTPNotFound()
+        record(self._data_dir, "app_update_downloaded", device=request[DEVICE])
+        return web.FileResponse(path, headers={"Content-Type": "application/vnd.android.package-archive"})
+
+    async def _on_app_update_notice(self, _: web.Request) -> web.Response:
+        """Tells a connected phone to look now. It only ever fetches from here, so this can't point it elsewhere."""
+        phone = self._phone
+        if phone is None or phone.closed:
+            return web.json_response({"told_phone": False})
+        await phone.send_json({"type": "update_available"})
+        return web.json_response({"told_phone": True})
 
     async def _on_voice(self, request: web.Request) -> web.StreamResponse:
         """Streams one JSON line per event, so the phone can speak before the reply is complete."""

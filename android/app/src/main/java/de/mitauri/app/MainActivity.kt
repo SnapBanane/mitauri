@@ -186,6 +186,7 @@ class MainActivity : FragmentActivity() {
     override fun onPause() {
         super.onPause()
         isVisible = false
+        Updater.checkIfDue(this)
     }
 
     /** Re-encoding keeps the photo small and removes its metadata, including where it was taken. */

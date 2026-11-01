@@ -28,6 +28,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -302,6 +303,22 @@ object Mitauri {
         waiting = false
     }
 
+    /** What the server offers, empty if nothing. Call off the main thread. */
+    fun fetchUpdateInfo(): JSONObject {
+        client.newCall(signedRequest("app-update", "GET", ByteArray(0)).build()).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("Server returned ${response.code}")
+            return JSONObject(response.body!!.string())
+        }
+    }
+
+    /** Hands over the app file as it arrives. Call off the main thread. */
+    fun downloadUpdate(read: (InputStream) -> Unit) {
+        slowClient.newCall(signedRequest("app-update/apk", "GET", ByteArray(0)).build()).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("Server returned ${response.code}")
+            read(response.body!!.byteStream())
+        }
+    }
+
     /** Returns WAV audio of the text. Call off the main thread. */
     fun fetchSpeech(text: String, language: String): ByteArray {
         val body = JSONObject().put("text", text).put("language", language).toString().toByteArray()
@@ -356,6 +373,7 @@ object Mitauri {
                     retryDelay = MIN_RETRY_MILLIS
                     if (!PresenceBeacon.hasKey(app)) fetchPresenceKey()
                     webSocket.send(JSONObject().put("type", "watch_module_query").toString())
+                    Updater.checkIfDue(app)
                 }
             }
         }
@@ -369,6 +387,7 @@ object Mitauri {
             }
             when (data.optString("type")) {
                 "reply" -> safely { onReply(data.getString("text")) }
+                "update_available" -> safely { Updater.checkNow(app) }
                 "door_command" -> safely { DoorOpener.command(app) }
                 "send_reply" -> safely {
                     NotificationAccess.sendDirectly(app, data.getString("notification"), data.getString("text")) { result ->

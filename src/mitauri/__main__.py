@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import sys
+from pathlib import Path
 from urllib.request import Request, urlopen
 
 from . import modules, proposals, wake
@@ -32,6 +33,8 @@ def main() -> None:
     module_command = commands.add_parser("modules", help="list modules, or switch one on or off")
     module_command.add_argument("action", choices=["list", "on", "off"], nargs="?", default="list")
     module_command.add_argument("name", nargs="?")
+    publish_update = commands.add_parser("publish-update", help="offer the newest app build to the phone")
+    publish_update.add_argument("folder", nargs="?", help="folder with the APK and output-metadata.json, if not this repo's build")
     commands.add_parser("wake-test", help="play a test alarm on the speaker, once")
     commands.add_parser("wake-stop", help="stop an alarm that's playing")
     proposal = commands.add_parser("proposal", help="review changes Mitauri has suggested to itself")
@@ -92,6 +95,27 @@ def main() -> None:
         finally:
             alarm_notice(config.data_dir, over=True)
         print("Done.")
+        return
+
+    if args.command == "publish-update":
+        from . import app_update
+        from .audit import record
+        try:
+            info = app_update.publish(config.data_dir, Path(args.folder) if args.folder else app_update.BUILD_FOLDER)
+        except app_update.PublishError as error:
+            raise SystemExit(str(error))
+        record(config.data_dir, "app_update_published", version=info["version_name"])
+        print(f"Published {info['version_name']} ({info['version_code']}).")
+        notice = Request(
+            f"http://127.0.0.1:{API_PORT}/app-update-notice", method="POST",
+            headers={"Authorization": f"Bearer {load_token(config.data_dir)}"},
+        )
+        try:
+            with urlopen(notice, timeout=5) as response:
+                told = json.load(response)["told_phone"]
+            print("The phone is fetching it now." if told else "The phone isn't connected, so it'll fetch it when it reconnects.")
+        except OSError:
+            print("The server isn't running, so the phone will fetch it once it is.")
         return
 
     if args.command == "wake-stop":

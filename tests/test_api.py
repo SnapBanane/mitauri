@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import hashlib
 import json
 import secrets
 import sys
@@ -7,11 +8,13 @@ import time
 from pathlib import Path
 
 import numpy as np
+import pytest
 from aiohttp import ClientSession
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from mitauri import api as api_module
+from mitauri import app_update
 from mitauri import tools
 from mitauri.api import Api, SentenceSplitter, is_door_command, load_token
 from mitauri.auth import Devices, device_id, signed_message
@@ -743,3 +746,54 @@ def test_token_is_private_and_stable(tmp_path):
     assert len(token) == 64
     assert load_token(tmp_path) == token
     assert (tmp_path / "internal_token").stat().st_mode & 0o077 == 0
+
+
+def make_build(folder, code, name="1.0", content=b"apk"):
+    folder.mkdir(exist_ok=True)
+    (folder / "app.apk").write_bytes(content)
+    (folder / "output-metadata.json").write_text(json.dumps(
+        {"elements": [{"versionCode": code, "versionName": name, "outputFile": "app.apk"}]}
+    ))
+    return folder
+
+
+def test_publishing_only_goes_forward(tmp_path):
+    assert app_update.latest(tmp_path) is None
+    build = make_build(tmp_path / "build", 5)
+    info = app_update.publish(tmp_path, build)
+    assert info == {"version_code": 5, "version_name": "1.0", "sha256": hashlib.sha256(b"apk").hexdigest(), "size": 3}
+    assert app_update.latest(tmp_path) == info
+    for code in (5, 4):
+        with pytest.raises(app_update.PublishError):
+            app_update.publish(tmp_path, make_build(tmp_path / "build", code))
+    with pytest.raises(app_update.PublishError):
+        app_update.publish(tmp_path, tmp_path / "nothing-here")
+    assert app_update.latest(tmp_path) == info
+
+
+def test_only_a_paired_phone_gets_the_update(tmp_path):
+    app_update.publish(tmp_path, make_build(tmp_path / "build", 7, content=b"the app"))
+
+    async def test(session):
+        for path in ("/app-update", "/app-update/apk"):
+            assert (await session.get(f"{BASE}{path}")).status == 401
+        info = await (await session.get(f"{BASE}/app-update", headers=signed("GET", "/app-update"))).json()
+        assert info["version_code"] == 7
+        apk = await session.get(f"{BASE}/app-update/apk", headers=signed("GET", "/app-update/apk"))
+        assert await apk.read() == b"the app"
+    with_api(test, tmp_path)
+
+
+def test_no_update_published_is_an_empty_answer(tmp_path):
+    async def test(session):
+        assert await (await session.get(f"{BASE}/app-update", headers=signed("GET", "/app-update"))).json() == {}
+        assert (await session.get(f"{BASE}/app-update/apk", headers=signed("GET", "/app-update/apk"))).status == 404
+    with_api(test, tmp_path)
+
+
+def test_update_notice_needs_the_internal_token(tmp_path):
+    async def test(session):
+        assert (await session.post(f"{BASE}/app-update-notice")).status == 401
+        told = await session.post(f"{BASE}/app-update-notice", headers={"Authorization": "Bearer secret"})
+        assert await told.json() == {"told_phone": False}
+    with_api(test, tmp_path)

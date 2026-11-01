@@ -258,6 +258,22 @@ start, about 1.1 GB in all, and recognition needs about 2 GB of memory. If it he
 each reply took. Your
 words still go to Claude as text. Voice mode doesn't run over the lock screen.
 
+## Update the phone app
+
+After one install by cable, the phone updates itself:
+
+```bash
+(cd android && ./gradlew assembleRelease) && uv run mitauri publish-update
+```
+
+Raise `versionCode` first, because phones only take a higher one. A connected phone fetches the new version
+straight away, and otherwise does so when it reconnects. It waits while the app is open or a call is running, and
+Android refuses anything not signed with your key. Android may ask you to confirm the first update, and shows a
+notification whenever it needs a tap. Settings > App has a button to check by hand.
+
+To update someone else's server, copy the APK and `output-metadata.json` to a folder there and run
+`uv run mitauri publish-update that-folder`. All phones must have the app from the same signing key.
+
 ## Connect Google Calendar and Tasks
 
 1. In the [Google Cloud console](https://console.cloud.google.com/), create a project and enable the

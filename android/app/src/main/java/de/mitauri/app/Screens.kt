@@ -921,6 +921,14 @@ fun SettingsScreen(
         }
         SectionLabel("App")
         Group {
+            val context = LocalContext.current
+            ListRow(
+                "Check for updates",
+                Updater.status.ifEmpty { "Version ${Updater.currentVersionName(context)}" },
+                R.drawable.ic_restart,
+                onClick = { Updater.checkByHand(context) },
+            )
+            Divider()
             ListRow("Restart Mitauri", icon = R.drawable.ic_restart, onClick = onRestart)
             Divider()
             ListRow("Disconnect", icon = R.drawable.ic_unlink, titleColor = MitauriColors.Danger, onClick = { confirmDisconnect = true })
