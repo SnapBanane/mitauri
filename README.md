@@ -203,10 +203,14 @@ account. It's unofficial and could stop working. Only the symbols are sent.
 
 ## Presence sensor
 
-`firmware/presence` makes an ESP32 listen for a Bluetooth beacon from the app and report it over USB. The
-beacon's token changes every 5 minutes, and only your server has the key, so nobody else can track it or
+`firmware/presence` makes an ESP32 listen for Bluetooth beacons from the app and the laptop and report them over
+USB. Each beacon's token changes every 5 minutes, and only your server has the key, so nobody else can track it or
 fake it. Sightings stay in memory and are never saved. Distance is rough, and being away looks the same as
-Bluetooth being off. Build and flash with `pio run -t upload` in that folder.
+Bluetooth being off. Build and flash with `pio run -e esp32dev -t upload` in that folder, or `-e esp32s3` for an
+ESP32-S3 board.
+
+Name the sensors in `MITAURI_PRESENCE_SENSORS`, as `.env.example` shows. A sensor only reports while it's plugged
+into the machine running Mitauri, so a sensor that's unplugged shows as unknown rather than away.
 
 ## Watch
 

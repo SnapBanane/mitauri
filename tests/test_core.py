@@ -775,6 +775,10 @@ def sighting(rssi, token=None):
     return json.dumps({"t": token or presence_module.token_for(KEY, NOW // 300), "r": rssi})
 
 
+def phone_state(sensor, now):
+    return sensor.status(now)["sensors"]["home"]["phone"]["state"]
+
+
 def test_presence_token_matches_the_phone():
     assert presence_module.token_for(KEY, 5_972_000) == "bdea298293568dda"
 
@@ -783,25 +787,55 @@ def test_presence_only_accepts_our_rotating_token():
     sensor = presence_module.Presence(KEY)
     sensor.handle_line('{"hb":1}', NOW)
     sensor.handle_line(sighting(-50, "00" * 8), NOW)
-    assert sensor.status(NOW)["state"] == "away"
+    assert phone_state(sensor, NOW) == "away"
     old = presence_module.token_for(KEY, NOW // 300 - 10)
     sensor.handle_line(sighting(-50, old), NOW)
-    assert sensor.status(NOW)["state"] == "away"
+    assert phone_state(sensor, NOW) == "away"
     sensor.handle_line(sighting(-50), NOW)
-    assert sensor.status(NOW)["state"] == "near"
+    assert phone_state(sensor, NOW) == "near"
 
 
 def test_presence_states_and_garbage_from_the_sensor():
     sensor = presence_module.Presence(KEY)
-    assert sensor.status(NOW)["state"] == "unknown"
+    assert sensor.status(NOW) == {"sensors": {}}
     for garbage in ("", "not json", "[1,2]", '{"t":1}', '{"r":"x","t":"y"}', sighting(5)):
         sensor.handle_line(garbage, NOW)
     sensor.handle_line(sighting(-85), NOW)
-    assert sensor.status(NOW)["state"] == "nearby"
+    assert phone_state(sensor, NOW) == "nearby"
     later = NOW + presence_module.AWAY_AFTER_SECONDS + 1
     sensor.handle_line('{"hb":1}', later)
-    assert sensor.status(later)["state"] == "away"
-    assert sensor.status(later + 60)["state"] == "unknown"
+    assert phone_state(sensor, later) == "away"
+    assert sensor.status(later + 60)["sensors"]["home"]["state"] == "unknown"
+
+
+def test_presence_tells_sensors_and_devices_apart():
+    sensor = presence_module.Presence(KEY)
+    laptop_key = presence_module.device_key(KEY, "laptop")
+    assert laptop_key != KEY
+    sensor.handle_line(sighting(-50), NOW, "desk")
+    sensor.handle_line(sighting(-50, presence_module.token_for(laptop_key, NOW // 300)), NOW, "home")
+    status = sensor.status(NOW)["sensors"]
+    assert (status["desk"]["phone"]["state"], status["desk"]["laptop"]["state"]) == ("near", "away")
+    assert (status["home"]["phone"]["state"], status["home"]["laptop"]["state"]) == ("away", "near")
+
+
+def test_presence_lists_a_silent_sensor_as_unknown(monkeypatch):
+    sensor = presence_module.Presence(KEY)
+    monkeypatch.setattr(sensor, "_read_forever", lambda *_: None)
+    sensor.watch_serial("/dev/null", "desk")
+    assert sensor.status(NOW)["sensors"]["desk"]["state"] == "unknown"
+
+
+def test_presence_reads_sensor_names_and_ignores_broken_entries():
+    assert presence_module.parse_sensors("") == {}
+    assert presence_module.parse_sensors(" desk=/dev/a , home=/dev/b,nonsense,=/dev/c,x=") == {
+        "desk": "/dev/a", "home": "/dev/b"}
+
+
+def test_beacon_payload_is_what_the_sensor_expects():
+    window = 5_972_000
+    payload = presence_module.beacon_payload(KEY, window)
+    assert payload[:2] == b"MT" and payload[2:].hex() == "bdea298293568dda"
 
 
 def test_presence_tool_is_not_on_discord():
