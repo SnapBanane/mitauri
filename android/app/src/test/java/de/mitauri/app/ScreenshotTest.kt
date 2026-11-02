@@ -86,6 +86,25 @@ class ScreenshotTest {
     @Test fun islandSpeaking() = onScreen { Pill(IslandMode.SPEAKING, "Speaking", true, camera = camera) {} }
     @Test fun islandMessage() = onScreen { Pill(IslandMode.MESSAGE, "Opening door, tap to cancel", true, camera = camera) {} }
 
+    @Test fun islandMusicNarrow() = onScreen { Pill(IslandMode.MUSIC, "", true, music = song, camera = camera.copy(side = MIN_SIDE)) {} }
+    @Test fun islandMusicWide() = onScreen { Pill(IslandMode.MUSIC, "", true, music = song, camera = camera.copy(side = MAX_SIDE)) {} }
+
+    private val answered = OngoingActivity(ActivityKind.CALL, "a", "Max Mustermann", "Mobil", 10_000L)
+    private val routeStep = OngoingActivity(ActivityKind.NAVIGATION, "b", "In 200 m rechts", "Hauptstraße, noch 12 min")
+
+    @Test fun islandCall() = onScreen { Pill(IslandMode.CALL, "", true, clock = { 75_000L }, camera = camera, activity = answered) {} }
+    @Test fun islandIncoming() = onScreen { Pill(IslandMode.CALL, "", true, camera = camera, activity = answered.copy(startedAt = null)) {} }
+    @Test fun islandCallExpanded() = onScreen { Pill(IslandMode.CALL, "", true, expanded = true, clock = { 75_000L }, camera = camera, activity = answered) {} }
+    @Test fun islandRoute() = onScreen { Pill(IslandMode.NAVIGATION, "", true, camera = camera, activity = routeStep) {} }
+
+    private fun alert(kind: AlertKind, text: String) = onScreen { Pill(IslandMode.ALERT, "", true, camera = camera, alert = IslandAlert(kind, text)) {} }
+
+    @Test fun islandCharging() = alert(AlertKind.CHARGING, "73%")
+    @Test fun islandLowBattery() = alert(AlertKind.LOW_BATTERY, "12%")
+    @Test fun islandSilent() = alert(AlertKind.SILENT, "Silent")
+    @Test fun islandHeadphones() = alert(AlertKind.HEADPHONES, "Sony WH-1000XM4")
+    @Test fun islandUnlocked() = alert(AlertKind.UNLOCKED, "Unlocked")
+
     private val timer = LiveCountdown("Pizza", 10_000_000L, "")
     private val leave = LiveCountdown("Losgehen", 10_000_000L, "S 1 ab Pasing um 07:42")
 

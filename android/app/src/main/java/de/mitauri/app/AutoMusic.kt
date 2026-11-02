@@ -79,6 +79,9 @@ object AutoMusic {
                 // Android also lists what's already connected when this starts. Only a new connection counts.
                 if (!connected.add(name)) continue
                 connectedAt[name] = SystemClock.elapsedRealtime()
+                if (leftAt[name]?.let { isDropout(SystemClock.elapsedRealtime() - it) } != true) {
+                    Island.flash(IslandAlert(AlertKind.HEADPHONES, name))
+                }
                 when {
                     name !in chosen -> report("$name connected, but it isn't switched on here")
                     leftAt[name]?.let { isDropout(SystemClock.elapsedRealtime() - it) } == true ->

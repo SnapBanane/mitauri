@@ -11,6 +11,7 @@ import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -135,17 +136,13 @@ object Music {
     private val main = Handler(Looper.getMainLooper())
     private var app: Context? = null
     private var controller: MediaController? = null
-    private var wasPlaying = false
-    private var pausedTooLong = true // Spotify sitting idle in the background shouldn't show anything.
+    private val presence = MusicPresence(PAUSED_HOLD_MILLIS)
     private var hidden = false
     private var artSource: Bitmap? = null
     private var art: ImageBitmap? = null
     private var accent: Color? = null
 
-    private val pauseOver = Runnable {
-        pausedTooLong = true
-        refresh()
-    }
+    private val pauseOver = Runnable { refresh() }
     private val changes = object : MediaController.Callback() {
         override fun onMetadataChanged(metadata: MediaMetadata?) = refresh()
         override fun onPlaybackStateChanged(state: PlaybackState?) = refresh()
@@ -172,10 +169,12 @@ object Music {
         owner.getSystemService(MediaSessionManager::class.java).removeOnActiveSessionsChangedListener(sessions)
         follow(null)
         main.removeCallbacks(pauseOver)
-        wasPlaying = false
-        pausedTooLong = true
+        presence.reset()
         app = null
     }
+
+    /** Timers stop while the phone sleeps, so a pause that ended in the night is noticed when the screen comes on. */
+    fun recheck() = refresh()
 
     fun act(action: MusicAction) {
         val controls = controller?.transportControls ?: return
@@ -213,6 +212,7 @@ object Music {
     private fun follow(next: MediaController?) {
         if (next?.sessionToken == controller?.sessionToken) return
         controller?.unregisterCallback(changes)
+        presence.reset() // A session that comes back later starts from silence.
         controller = next
         next?.registerCallback(changes, main)
         refresh()
@@ -224,25 +224,30 @@ object Music {
         else -> false
     }
 
+    /** Spotify on the laptop also shows as a session here, but it isn't playing on this phone. */
+    private fun isSoundingHere(): Boolean {
+        val current = controller ?: return false
+        return current.playbackState?.state == PlaybackState.STATE_PLAYING &&
+            current.playbackInfo?.playbackType != MediaController.PlaybackInfo.PLAYBACK_TYPE_REMOTE
+    }
+
     private fun refresh() {
         val context = app ?: return
         val playing = isPlayingNow()
-        if (playing) {
-            main.removeCallbacks(pauseOver)
-            pausedTooLong = false
-        } else if (hidden) {
+        if (!playing && hidden) {
             // Hide lasts until the next pause, so the next listen shows up again.
             hidden = false
-            pausedTooLong = true
-        } else if (wasPlaying) {
-            main.postDelayed(pauseOver, PAUSED_HOLD_MILLIS)
+            presence.reset()
         }
-        wasPlaying = playing
+        val now = SystemClock.elapsedRealtime()
+        val present = presence.update(isSoundingHere(), now)
+        main.removeCallbacks(pauseOver)
+        presence.millisLeft(now)?.let { main.postDelayed(pauseOver, it) }
         val metadata = controller?.metadata
         val title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty()
         Island.setMusic(
             context,
-            if (title.isBlank() || hidden || pausedTooLong) {
+            if (title.isBlank() || hidden || !present) {
                 null
             } else {
                 val state = controller?.playbackState

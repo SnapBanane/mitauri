@@ -40,6 +40,11 @@ class NotificationWatcher : NotificationListenerService() {
     override fun onListenerConnected() {
         instance = this
         Music.start(this)
+        try {
+            activeNotifications?.forEach { IslandNotifications.posted(this, it) }
+        } catch (_: RuntimeException) {
+            // Access went away in the same moment, so there's nothing to show.
+        }
     }
 
     override fun onListenerDisconnected() {
@@ -48,6 +53,7 @@ class NotificationWatcher : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
+        IslandNotifications.posted(this, sbn)
         NotificationAccess.rememberApp(this, sbn.packageName)
         WatchLink.onNotification(this, sbn)
         if (sbn.packageName in NotificationAccess.allowedApps(this) && !NotificationFilter.isProtectedApp(sbn.packageName)) {
@@ -55,6 +61,8 @@ class NotificationWatcher : NotificationListenerService() {
             if (own.isNotEmpty()) Mitauri.sendStyleLines(own)
         }
     }
+
+    override fun onNotificationRemoved(sbn: StatusBarNotification) = IslandNotifications.removed(sbn.key)
 
     companion object {
         var instance: NotificationWatcher? = null

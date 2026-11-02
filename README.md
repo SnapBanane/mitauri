@@ -183,18 +183,24 @@ screen or saved on the phone, but it comes back when the app reconnects to a run
 phone stops it coming back, but a reminder set with it still fires.
 
 While Spotify plays, a small pill shows the cover left of the camera and the song name right of it.
-Tap for the full text, live bars, previous, pause, next and Hide, which lasts until you next pause. A paused song stays for a minute.
+Tap for the full text, live bars, previous, pause, next and Hide, which lasts until you next pause. A paused song stays for a minute, and only sound playing on this phone brings it up, so Spotify idling or playing on another device doesn't.
 Its bars follow the music, using only how strong the bass to treble are at that moment, and stop while the screen is
 off. Voice and countdowns take priority. This reads Spotify's media session through the app's notification access, so it
 needs no account or Spotify API, and nothing about the song leaves the phone.
 
 The island needs one thing switched on: Settings > Accessibility > Mitauri Island, or the Island item in the app's
 setup. Android keeps normal "over other apps" windows under the status bar, where they never get taps, and it shows a
-notice for them. The accessibility kind sits above it with no notice. Mitauri Island asks for no events and no window
-content, so it can't read your screen, and the pill still hides on the lock screen. Without it, the pill still
-shows, but tapping it doesn't work.
+notice for them. The accessibility kind sits above it with no notice. Mitauri Island reads only where the status bar's
+icons sit, never what they say or anything in another window, and only while the pill is showing. The pill still hides
+on the lock screen. Without the service, the pill still shows, but tapping it doesn't work and it keeps a fixed size.
 
-The pill reads the camera's position from Android and leaves that space free, moving longer text below it.
+The pill reads the camera's position from Android and leaves that space free, moving longer text below it. It grows and
+shrinks so it ends just before the nearest status bar icon.
+
+The island also shows calls with their time, routes from a navigation app, and countdowns from other apps. Tap or hold
+to open one, then Open goes to its app. With several going at once, swipe sideways to switch. For a moment it also
+shows charging, low battery, the ringer changing, headphones connecting and unlocking. All of this comes from the phone
+itself, stays on the phone and leaves out protected apps.
 
 ## Stocks
 

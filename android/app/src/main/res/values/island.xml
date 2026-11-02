@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="island_service_description">Lets the Mitauri island sit around the camera and react to taps. It does not read anything on your screen.</string>
+    <string name="island_service_description">Lets the Mitauri island sit around the camera, react to taps and size itself around the status bar icons. It reads only where those icons sit, never what they say or anything else on your screen.</string>
 </resources>

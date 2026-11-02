@@ -6,10 +6,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.app.KeyguardManager
+import android.app.PendingIntent
 import android.content.res.Configuration
 import android.graphics.PixelFormat
 import android.graphics.Point
+import android.graphics.Rect
 import android.hardware.display.DisplayManager
+import android.media.AudioManager
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -92,7 +96,9 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.TransformOrigin
@@ -134,15 +140,18 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 enum class IslandMode {
-    LISTENING, THINKING, SPEAKING, MESSAGE, LIVE, MUSIC;
+    LISTENING, THINKING, SPEAKING, MESSAGE, LIVE, MUSIC, CALL, NAVIGATION, ALERT;
 
     val isVoice get() = this == LISTENING || this == THINKING || this == SPEAKING
+
+    /** Stays for as long as it's going on, and steps aside for anything more urgent. */
+    val isBackground get() = this == LIVE || this == MUSIC || this == CALL || this == NAVIGATION
 }
 
 data class LiveCountdown(val title: String, val untilMillis: Long, val detail: String)
 
 /** Where the camera sits, as seen from the top of the screen. A width of zero means it isn't on the top edge. */
-data class CameraHole(val width: Dp, val centerY: Dp) {
+data class CameraHole(val width: Dp, val centerY: Dp, val side: Dp = DEFAULT_SIDE) { // side: the room on each side of it
     val pillTop get() = (centerY - ROW_HEIGHT / 2 - PILL_EDGE).coerceAtLeast(PILL_MIN_TOP)
 
     companion object {
@@ -156,9 +165,8 @@ private val ROW_HEIGHT = 22.dp
 private val PILL_MAX_WIDTH = 340.dp
 private val DRAWING_HEIGHT = 320.dp
 private val TEXT_FADE = 12.dp
-private val VOICE_TEXT_WIDTH = 64.dp
+private val VOICE_TEXT_EXTRA = 6.dp
 private val PILL_MAX_RADIUS = 30.dp
-private val MUSIC_TITLE_WIDTH = 58.dp // Leaves the status bar icons on both sides uncovered.
 private val CAMERA_MARGIN = 2.dp
 private val BELOW_CAMERA = 40.dp // Expanded content starts here, clear of the camera.
 private val SWIPE_DISTANCE = 18.dp
@@ -183,7 +191,8 @@ fun songTime(millis: Long): String {
 
 /**
  * Lets the island draw above the status bar, which is the only way taps on it reach it, and spares the phone's
- * "displayed over other apps" notice. It asks for no events and no window content, so it reads nothing on the screen.
+ * "displayed over other apps" notice. It also finds where the status bar's icons sit, so the pill can end before them.
+ * Only their positions are ever read, not their text or descriptions, and no other window is looked into.
  */
 class IslandService : AccessibilityService() {
     override fun onServiceConnected() {
@@ -197,10 +206,42 @@ class IslandService : AccessibilityService() {
         return super.onUnbind(intent)
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Island.statusBarChanged()
     override fun onInterrupt() = Unit
 
+    /** The left and right edge of each visible item in the status bar, or null if the status bar can't be seen. */
+    fun statusBarItems(): List<IntRange>? {
+        val barHeight = resources.getDimensionPixelSize(
+            resources.getIdentifier("status_bar_height", "dimen", "android").takeIf { it != 0 } ?: return null,
+        )
+        val box = Rect()
+        val window = windows.firstOrNull {
+            it.getBoundsInScreen(box)
+            box.top == 0 && box.height() in 1..barHeight * 2 && it.root?.packageName == SYSTEM_UI
+        } ?: return null
+        window.getBoundsInScreen(box)
+        val barBottom = box.bottom
+        val barWidth = box.width()
+        val items = mutableListOf<IntRange>()
+        val waiting = ArrayDeque(listOfNotNull(window.root))
+        var looked = 0
+        while (waiting.isNotEmpty() && looked++ < MAX_NODES) {
+            val node = waiting.removeLast()
+            if (node.childCount == 0) {
+                node.getBoundsInScreen(box)
+                if (node.isVisibleToUser && box.width() in 1 until barWidth / 2 && box.top >= 0 && box.bottom <= barBottom) {
+                    items += box.left..box.right
+                }
+            } else {
+                for (index in 0 until node.childCount) node.getChild(index)?.let(waiting::add)
+            }
+        }
+        return items
+    }
+
     companion object {
+        private const val SYSTEM_UI = "com.android.systemui"
+        private const val MAX_NODES = 200
         var instance: IslandService? = null
             private set
     }
@@ -210,6 +251,9 @@ class IslandService : AccessibilityService() {
 object Island {
     private const val EXIT_MILLIS = 480L
     private const val COLLAPSE_MILLIS = 8_000L
+    private const val ALERT_MILLIS = 2_500L
+    private const val UNLOCK_MILLIS = 1_000L
+    private const val MEASURE_DELAY_MILLIS = 300L
     private val main = Handler(Looper.getMainLooper())
     private val remove = Runnable { removeView() }
     private val collapse = Runnable { expanded = false }
@@ -229,6 +273,14 @@ object Island {
     private val expire = Runnable { clearLive() }
     private var live by mutableStateOf<LiveCountdown?>(null)
     private var music by mutableStateOf<NowPlaying?>(null)
+    private var call by mutableStateOf<OngoingActivity?>(null)
+    private var route by mutableStateOf<OngoingActivity?>(null)
+    private var alert by mutableStateOf<IslandAlert?>(null)
+    private var picked: IslandMode? = null // What a sideways swipe chose to see first.
+    private var cameraCenter = 0
+    private var ringer: Int? = null
+    private val alertOver = Runnable { if (mode == IslandMode.ALERT) hide() }
+    private val measure = Runnable { measureRoom() }
     private var expanded by mutableStateOf(false)
     private var camera by mutableStateOf(CameraHole.NONE)
 
@@ -262,7 +314,90 @@ object Island {
         changeExpanded(false)
         main.removeCallbacks(expire)
         main.postDelayed(expire, countdown.untilMillis - System.currentTimeMillis() + NOW_HOLD_MILLIS)
-        if (!embedded && (!shown || mode == IslandMode.LIVE || mode == IslandMode.MUSIC)) showLive()
+        backgroundChanged()
+    }
+
+    /** A timer from another app repeats its notification, which shouldn't close the pill each time. */
+    fun setCountdownIfNew(context: Context, countdown: LiveCountdown) {
+        if (live?.untilMillis != countdown.untilMillis || live?.title != countdown.title) setLive(context, countdown)
+    }
+
+    fun setActivity(context: Context, activity: OngoingActivity) {
+        attach(context)
+        if (activity.kind == ActivityKind.CALL) call = activity else route = activity
+        backgroundChanged()
+    }
+
+    fun clearActivity(key: String) {
+        if (call?.key == key) call = null
+        if (route?.key == key) route = null
+        if ((mode == IslandMode.CALL && call == null) || (mode == IslandMode.NAVIGATION && route == null)) hide()
+    }
+
+    /** Says something for a moment, as the iPhone does when it's plugged in. Never over voice or a message. */
+    fun flash(newAlert: IslandAlert, millis: Long = ALERT_MILLIS) {
+        val context = app ?: return
+        val landscape = context.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        if (!allowedNow(context) || landscape || (shown && (mode.isVoice || mode == IslandMode.MESSAGE))) return
+        alert = newAlert
+        show(context, IslandMode.ALERT, "")
+        main.removeCallbacks(alertOver)
+        main.postDelayed(alertOver, millis)
+    }
+
+    private fun backgroundChanged() {
+        if (!embedded && (!shown || mode.isBackground)) showBackground()
+    }
+
+    private fun onSystemEvent(intent: Intent, sticky: Boolean) {
+        val context = app ?: return
+        when (intent.action) {
+            Intent.ACTION_SCREEN_ON -> Music.recheck()
+            Intent.ACTION_POWER_CONNECTED -> flash(IslandAlert(AlertKind.CHARGING, batteryText(context)))
+            Intent.ACTION_BATTERY_LOW -> flash(IslandAlert(AlertKind.LOW_BATTERY, batteryText(context)))
+            AudioManager.RINGER_MODE_CHANGED_ACTION -> {
+                val now = intent.getIntExtra(AudioManager.EXTRA_RINGER_MODE, AudioManager.RINGER_MODE_NORMAL)
+                val changed = ringer != null && ringer != now
+                ringer = now
+                if (changed && !sticky) {
+                    flash(
+                        when (now) {
+                            AudioManager.RINGER_MODE_SILENT -> IslandAlert(AlertKind.SILENT, "Silent")
+                            AudioManager.RINGER_MODE_VIBRATE -> IslandAlert(AlertKind.VIBRATE, "Vibrate")
+                            else -> IslandAlert(AlertKind.RING, "Ring")
+                        },
+                    )
+                }
+            }
+            Intent.ACTION_USER_PRESENT -> flash(IslandAlert(AlertKind.UNLOCKED, "Unlocked"), UNLOCK_MILLIS)
+        }
+        sync()
+    }
+
+    private fun batteryText(context: Context) =
+        "${context.getSystemService(BatteryManager::class.java).getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)}%"
+
+    /** The status bar changed. Waits for it to settle, and doesn't look at all while there's no pill to fit. */
+    fun statusBarChanged() {
+        if (view == null) return
+        main.removeCallbacks(measure)
+        main.postDelayed(measure, MEASURE_DELAY_MILLIS)
+    }
+
+    private fun measureRoom() {
+        val service = IslandService.instance ?: return
+        if (view == null) return
+        val items = try {
+            service.statusBarItems()
+        } catch (error: RuntimeException) {
+            Log.w("Mitauri", "The status bar couldn't be measured: ${error.message}")
+            null
+        } ?: return
+        val clear = clearSpace(cameraCenter, items) ?: return
+        val density = service.resources.displayMetrics.density
+        val side = sideFor((clear / density).dp, camera.width, CAMERA_MARGIN)
+        Log.i("Mitauri", "Island room: ${items.size} items, nearest ${clear}px, each side ${side.value}dp")
+        if (kotlin.math.abs((side - camera.side).value) >= 2) camera = camera.copy(side = side)
     }
 
     /** The song stays in the pill while nothing more urgent is there. */
@@ -271,8 +406,8 @@ object Island {
         music = playing
         if (playing == null) {
             if (mode == IslandMode.MUSIC) hide()
-        } else if (live == null && !embedded && (!shown || mode == IslandMode.MUSIC)) {
-            show(context, IslandMode.MUSIC, "")
+        } else {
+            backgroundChanged()
         }
     }
 
@@ -283,19 +418,19 @@ object Island {
         if (mode == IslandMode.LIVE) hide()
     }
 
-    private fun showLive() {
-        val context = app ?: return
-        show(context, IslandMode.LIVE, "")
-    }
+    private fun backgrounds() = listOfNotNull(
+        IslandMode.CALL.takeIf { call != null },
+        IslandMode.NAVIGATION.takeIf { route != null },
+        IslandMode.LIVE.takeIf { live != null },
+        IslandMode.MUSIC.takeIf { music != null },
+    )
 
     /** Puts back what was there before voice or a message took over. Returns false if nothing was. */
     private fun showBackground(): Boolean {
         val context = app ?: return false
-        when {
-            live != null -> show(context, IslandMode.LIVE, "")
-            music != null -> show(context, IslandMode.MUSIC, "")
-            else -> return false
-        }
+        val going = backgrounds()
+        val next = picked?.takeIf { it in going } ?: going.firstOrNull() ?: return false
+        show(context, next, "")
         return true
     }
 
@@ -331,9 +466,12 @@ object Island {
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_USER_PRESENT)
             addAction(Intent.ACTION_CONFIGURATION_CHANGED)
+            addAction(Intent.ACTION_POWER_CONNECTED)
+            addAction(Intent.ACTION_BATTERY_LOW)
+            addAction(AudioManager.RINGER_MODE_CHANGED_ACTION)
         }
         val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) = sync()
+            override fun onReceive(context: Context, intent: Intent) = onSystemEvent(intent, isInitialStickyBroadcast)
         }
         if (Build.VERSION.SDK_INT >= 33) {
             owner.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
@@ -387,6 +525,8 @@ object Island {
                         mode, text, shown, live, expanded,
                         music = music,
                         camera = camera,
+                        activity = if (mode == IslandMode.CALL) call else route,
+                        alert = alert,
                         animated = true,
                         onBounds = ::fitWindow,
                         onExpired = ::clearLive,
@@ -402,7 +542,9 @@ object Island {
                             keepOpen()
                             Music.seek(it)
                         },
+                        onOpen = ::openActivity,
                         onSwipe = ::onSwipe,
+                        onSwipeSideways = ::switchBackground,
                     ) { onTap(host) }
                 }
             }
@@ -416,7 +558,7 @@ object Island {
             // Checked here, before Compose can claim the event for itself.
             override fun dispatchTouchEvent(event: MotionEvent): Boolean {
                 if (event.action == MotionEvent.ACTION_OUTSIDE) {
-                    if (mode == IslandMode.LIVE || mode == IslandMode.MUSIC) {
+                    if (mode.isBackground || mode == IslandMode.ALERT) {
                         changeExpanded(false) // A tap elsewhere never stops a countdown or the music.
                     } else if (!DoorOpener.cancel() && !ReplySender.cancel() && mode != IslandMode.LISTENING) {
                         VoiceMode.stop()
@@ -475,6 +617,7 @@ object Island {
         touch = touchRoot
         touchParams = touching
         owner = overlayOwner
+        statusBarChanged()
     }
 
     /** The touch window follows the pill. It's a little larger during a movement, and exact once settled. */
@@ -495,12 +638,15 @@ object Island {
         val density = context.resources.displayMetrics.density
         val display = context.getSystemService(DisplayManager::class.java).getDisplay(Display.DEFAULT_DISPLAY)
         val hole = display?.cutout?.boundingRectTop
+        val screenWidth = Point().also { @Suppress("DEPRECATION") display?.getRealSize(it) }.x
         if (hole == null || hole.isEmpty) {
-            camera = CameraHole.NONE
+            camera = CameraHole.NONE.copy(side = camera.side)
+            cameraCenter = screenWidth / 2
             return 0
         }
-        camera = CameraHole((hole.width() / density).dp, ((hole.centerY() + HOLE_BELOW_BOX_PIXELS) / density).dp)
-        return hole.centerX() - Point().also { @Suppress("DEPRECATION") display.getRealSize(it) }.x / 2
+        camera = CameraHole((hole.width() / density).dp, ((hole.centerY() + HOLE_BELOW_BOX_PIXELS) / density).dp, camera.side)
+        cameraCenter = hole.centerX()
+        return hole.centerX() - screenWidth / 2
     }
 
     private fun removeView() {
@@ -526,7 +672,25 @@ object Island {
         if (expanded) changeExpanded(true)
     }
 
-    private fun canExpand() = mode == IslandMode.LIVE || mode == IslandMode.MUSIC
+    private fun canExpand() = mode.isBackground
+
+    private fun switchBackground(forward: Boolean) {
+        val going = backgrounds()
+        if (!mode.isBackground || expanded || going.size < 2) return
+        val here = going.indexOf(mode).coerceAtLeast(0)
+        picked = going[(here + if (forward) 1 else going.size - 1) % going.size]
+        view?.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+        showBackground()
+    }
+
+    private fun openActivity(activity: OngoingActivity) {
+        changeExpanded(false)
+        try {
+            activity.open?.send()
+        } catch (_: PendingIntent.CanceledException) {
+            // The call or route ended in the same moment.
+        }
+    }
 
     private fun onSwipe(down: Boolean) {
         if (canExpand() && down != expanded) {
@@ -536,6 +700,10 @@ object Island {
     }
 
     private fun onTap(context: Context) {
+        if (mode == IslandMode.ALERT) {
+            hide()
+            return
+        }
         if (canExpand()) {
             view?.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
             changeExpanded(!expanded)
@@ -575,7 +743,11 @@ fun Pill(
     onDismiss: () -> Unit = {},
     onMusic: (MusicAction) -> Unit = {},
     onSeek: (Long) -> Unit = {},
+    activity: OngoingActivity? = null,
+    alert: IslandAlert? = null,
+    onOpen: (OngoingActivity) -> Unit = {},
     onSwipe: (Boolean) -> Unit = {},
+    onSwipeSideways: (Boolean) -> Unit = {},
     onTap: () -> Unit,
 ) {
     val density = LocalDensity.current
@@ -617,6 +789,7 @@ fun Pill(
     )
     val tap by rememberUpdatedState(onTap)
     val swipe by rememberUpdatedState(onSwipe)
+    val swipeSideways by rememberUpdatedState(onSwipeSideways)
     val swipeDistance = with(density) { SWIPE_DISTANCE.toPx() }
     val maxRadius = with(density) { PILL_MAX_RADIUS.toPx() }
     val sound = rememberBarLevels(mode == IslandMode.MUSIC && music?.playing == true)
@@ -642,6 +815,9 @@ fun Pill(
                             shownMode == IslandMode.LIVE && live != null -> LiveContent(live, open, camera, clock, onExpired, onDismiss)
                             shownMode == IslandMode.MUSIC && music != null ->
                                 if (open) MusicExpanded(music, sound, onMusic, onSeek) else MusicCompact(music, sound, camera)
+                            (shownMode == IslandMode.CALL || shownMode == IslandMode.NAVIGATION) && activity != null ->
+                                ActivityContent(activity, open, camera, clock, onOpen)
+                            shownMode == IslandMode.ALERT && alert != null -> AlertContent(alert, camera)
                             shownMode == IslandMode.MESSAGE -> MessageContent(text, camera)
                             else -> VoiceContent(mode, text, camera)
                         }
@@ -667,7 +843,18 @@ fun Pill(
                         pressed = false
                     },
                     onTap = { tap() },
+                    onLongPress = { if (mode.isBackground && !expanded) tap() }, // As on the iPhone.
                 )
+            }
+            .pointerInput(Unit) {
+                var moved = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { moved = 0f },
+                    onDragEnd = { if (kotlin.math.abs(moved) > swipeDistance) swipeSideways(moved < 0) },
+                ) { change, amount ->
+                    change.consume()
+                    moved += amount
+                }
             }
             .pointerInput(Unit) {
                 var moved = 0f
@@ -713,8 +900,9 @@ private fun AroundCamera(camera: CameraHole, start: @Composable () -> Unit, end:
 }
 
 @Composable
-private fun Label(text: String, color: Color = Color.White) = Text(
+private fun Label(text: String, color: Color = Color.White, modifier: Modifier = Modifier) = Text(
     text,
+    modifier,
     color = color,
     fontSize = 14.sp,
     maxLines = 1,
@@ -746,7 +934,7 @@ private fun LiveContent(
         camera,
         {
             Canvas(Modifier.padding(end = 8.dp).size(9.dp)) { drawCircle(colour) }
-            Label(live.title)
+            Label(live.title, modifier = Modifier.widthIn(max = camera.side + 20.dp))
         },
         {
             Text(
@@ -897,7 +1085,7 @@ private fun MusicCompact(music: NowPlaying, levels: BarLevels, camera: CameraHol
         camera,
         {
             Row(
-                Modifier.width(MUSIC_TITLE_WIDTH),
+                Modifier.width(camera.side),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -906,7 +1094,7 @@ private fun MusicCompact(music: NowPlaying, levels: BarLevels, camera: CameraHol
                 MusicBars(levels, music.accent, Modifier.padding(end = 2.dp).size(width = 19.dp, height = 16.dp))
             }
         },
-        { SongTitle(music.title, Modifier.widthIn(max = MUSIC_TITLE_WIDTH), 14) },
+        { SongTitle(music.title, Modifier.widthIn(max = camera.side), 14) },
     )
 }
 
@@ -1076,11 +1264,139 @@ private fun MusicIcon(action: MusicAction, playing: Boolean, iconSize: Dp) {
     }
 }
 
+/** A call shows its time and a route its next step. Opening one goes to the app that's running it. */
+@Composable
+private fun ActivityContent(activity: OngoingActivity, expanded: Boolean, camera: CameraHole, clock: () -> Long, onOpen: (OngoingActivity) -> Unit) {
+    val isCall = activity.kind == ActivityKind.CALL
+    val colour = if (isCall) MitauriColors.Success else MitauriColors.AccentSoft
+    AroundCamera(
+        camera,
+        {
+            if (isCall) {
+                TintedIcon(R.drawable.ic_call, colour)
+            } else {
+                Canvas(Modifier.size(16.dp)) {
+                    drawPath(
+                        Path().apply {
+                            moveTo(size.width / 2, 0f)
+                            lineTo(size.width, size.height)
+                            lineTo(size.width / 2, size.height * 0.72f)
+                            lineTo(0f, size.height)
+                            close()
+                        },
+                        colour,
+                    )
+                }
+            }
+        },
+        {
+            if (isCall) {
+                CallTime(activity, colour, camera, clock)
+            } else {
+                SongTitle(activity.title, Modifier.widthIn(max = camera.side), 14)
+            }
+        },
+    )
+    if (expanded) {
+        Text(activity.title, Modifier.padding(top = 10.dp), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        if (activity.detail.isNotBlank()) {
+            Text(activity.detail, Modifier.padding(top = 4.dp), color = MitauriColors.Muted, fontSize = 13.sp, lineHeight = 18.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        }
+        Text(
+            "Open",
+            Modifier.padding(top = 6.dp, bottom = 4.dp).clickable { onOpen(activity) }.padding(vertical = 6.dp, horizontal = 12.dp),
+            color = MitauriColors.AccentSoft,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+        )
+    }
+}
+
+/** Updates once a second at most, like the countdown. */
+@Composable
+private fun CallTime(activity: OngoingActivity, colour: Color, camera: CameraHole, clock: () -> Long) {
+    val started = activity.startedAt
+    if (started == null) {
+        Label("Incoming", colour, Modifier.widthIn(max = camera.side + VOICE_TEXT_EXTRA))
+        return
+    }
+    var now by remember(started) { mutableLongStateOf(clock()) }
+    LaunchedEffect(started) {
+        while (isActive) {
+            delay(1000 - (now - started).mod(1000L))
+            now = clock()
+        }
+    }
+    Text(
+        songTime(now - started),
+        color = colour,
+        maxLines = 1,
+        style = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.SemiBold, fontFeatureSettings = "tnum"),
+    )
+}
+
+@Composable
+private fun TintedIcon(icon: Int, colour: Color) = Image(
+    painterResource(icon),
+    null,
+    Modifier.size(16.dp),
+    colorFilter = ColorFilter.tint(colour),
+)
+
+@Composable
+private fun AlertContent(alert: IslandAlert, camera: CameraHole) {
+    val colour = when (alert.kind) {
+        AlertKind.CHARGING, AlertKind.UNLOCKED -> MitauriColors.Success
+        AlertKind.LOW_BATTERY -> MitauriColors.Danger
+        AlertKind.SILENT, AlertKind.VIBRATE -> MitauriColors.Warning
+        AlertKind.RING, AlertKind.HEADPHONES -> MitauriColors.Ink
+    }
+    AroundCamera(
+        camera,
+        {
+            when (alert.kind) {
+                AlertKind.SILENT, AlertKind.VIBRATE, AlertKind.RING -> TintedIcon(R.drawable.ic_bell, colour)
+                AlertKind.UNLOCKED -> TintedIcon(R.drawable.ic_lock, colour)
+                AlertKind.CHARGING -> Canvas(Modifier.size(16.dp)) {
+                    val w = size.width
+                    val h = size.height
+                    drawPath(
+                        Path().apply {
+                            moveTo(w * 0.6f, 0f)
+                            lineTo(w * 0.15f, h * 0.58f)
+                            lineTo(w * 0.47f, h * 0.58f)
+                            lineTo(w * 0.4f, h)
+                            lineTo(w * 0.85f, h * 0.42f)
+                            lineTo(w * 0.53f, h * 0.42f)
+                            close()
+                        },
+                        colour,
+                    )
+                }
+                AlertKind.LOW_BATTERY -> Canvas(Modifier.size(width = 22.dp, height = 11.dp)) {
+                    val edge = 1.5.dp.toPx()
+                    drawRoundRect(colour, style = Stroke(edge), cornerRadius = CornerRadius(3.dp.toPx()))
+                    drawRect(colour, Offset(edge * 2, edge * 2), Size(size.width * 0.14f, size.height - edge * 4))
+                }
+                AlertKind.HEADPHONES -> Canvas(Modifier.size(16.dp)) {
+                    val w = size.width
+                    val h = size.height
+                    val stroke = Stroke(2.dp.toPx())
+                    drawArc(colour, 180f, 180f, false, Offset(w * 0.1f, h * 0.08f), Size(w * 0.8f, h * 0.9f), style = stroke)
+                    drawRoundRect(colour, Offset(0f, h * 0.55f), Size(w * 0.24f, h * 0.42f), CornerRadius(w * 0.08f))
+                    drawRoundRect(colour, Offset(w * 0.76f, h * 0.55f), Size(w * 0.24f, h * 0.42f), CornerRadius(w * 0.08f))
+                }
+            }
+        },
+        { Label(alert.text, colour, Modifier.widthIn(max = camera.side + VOICE_TEXT_EXTRA)) },
+    )
+}
+
 /** Mitauri's face where a song has its cover, then the bars beside the camera, so every state has the same shape. */
 @Composable
-private fun VoiceLeading(mode: IslandMode) {
+private fun VoiceLeading(mode: IslandMode, side: Dp) {
     Row(
-        Modifier.width(MUSIC_TITLE_WIDTH),
+        Modifier.width(side),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1102,8 +1418,8 @@ private fun VoiceContent(mode: IslandMode, text: String, camera: CameraHole) {
         shownMode = mode
         shownText = text
     }
-    AroundCamera(camera, { VoiceLeading(shownMode) }, {
-        Crossfade(shownText, Modifier.widthIn(max = VOICE_TEXT_WIDTH), animationSpec = tween(180), label = "text") { Label(it) }
+    AroundCamera(camera, { VoiceLeading(shownMode, camera.side) }, {
+        Crossfade(shownText, Modifier.widthIn(max = camera.side + VOICE_TEXT_EXTRA), animationSpec = tween(180), label = "text") { Label(it) }
     })
 }
 
@@ -1111,7 +1427,7 @@ private fun VoiceContent(mode: IslandMode, text: String, camera: CameraHole) {
 private fun MessageContent(text: String, camera: CameraHole) {
     var shownText by remember { mutableStateOf(text) }
     if (text.isNotEmpty()) shownText = text
-    AroundCamera(camera, { VoiceLeading(IslandMode.MESSAGE) }, { Label("Mitauri", MitauriColors.Muted) })
+    AroundCamera(camera, { VoiceLeading(IslandMode.MESSAGE, camera.side) }, { Label("Mitauri", MitauriColors.Muted) })
     Text(
         shownText,
         Modifier.padding(top = 8.dp, bottom = 6.dp),
@@ -1147,7 +1463,7 @@ private fun Bars(mode: IslandMode) {
             IslandMode.LISTENING -> MitauriColors.Success
             IslandMode.THINKING -> MitauriColors.Accent
             IslandMode.SPEAKING -> MitauriColors.AccentSoft
-            IslandMode.MESSAGE, IslandMode.LIVE, IslandMode.MUSIC -> MitauriColors.Warning
+            else -> MitauriColors.Warning
         },
         tween(220),
         label = "colour",

@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Asks for no events and no window content: this only lets the island draw above the status bar. -->
+<!-- Lets the island draw above the status bar and see where its icons sit. Events only say the status bar changed. -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowContentChanged|typeWindowStateChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:canRetrieveWindowContent="false"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
+    android:canRetrieveWindowContent="true"
     android:description="@string/island_service_description"
-    android:notificationTimeout="1000" />
+    android:notificationTimeout="1000"
+    android:packageNames="com.android.systemui" />
