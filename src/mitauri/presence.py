@@ -202,7 +202,7 @@ class Presence:
     def _beacon_status(self, name: str, listener: str, now: float) -> dict:  # listener: who reports hearing it
         reported, listening = self._reporters.get(listener, (0.0, False))
         if now - reported > REPORTER_SILENT_AFTER_SECONDS:
-            return {"state": "unknown", "reason": f"The {listener} hasn't reported lately."}
+            return {"state": "not_connected"}
         if not listening:
             return {"state": "unknown", "reason": f"The {listener} can't listen: Bluetooth is off or not allowed."}
         return self._device_status(name, listener, now)

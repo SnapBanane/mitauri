@@ -1406,6 +1406,8 @@ def test_dashboard_attention_ignores_away_but_not_silent_sensors():
         "sensors": {"home": {"phone": {"state": "away"}, "laptop": {"state": "near"}}},
     }
     assert dashboard.needs_attention(status) == []
+    status["sensors"] = {"bag": {"laptop": {"state": "not_connected"}}}  # a laptop that's off is normal
+    assert dashboard.needs_attention(status) == []
     status["sensors"] = {"home": {"state": "unknown", "reason": "This sensor isn't reporting."}}
     status["phone"]["connected"] = False
     assert dashboard.needs_attention(status) == [

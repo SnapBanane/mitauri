@@ -46,7 +46,7 @@ function facts(target, rows) {
 
 const STATE = {
   near: ["near", "good"], in_room: ["in room", "good"], nearby: ["nearby", ""],
-  away: ["away", "dim"], unknown: ["unknown", "warn"],
+  away: ["away", "dim"], not_connected: ["not connected", "dim"], unknown: ["unknown", "warn"],
 };
 
 function presenceRow(sensor, device, seen) {
@@ -107,7 +107,7 @@ function renderPhone(phone, now) {
   } else if (place.error) {
     rows.push(["Location", place.error, "bad"]);
   } else {
-    rows.push(["Location", phone.connected ? "asking the phone…" : "unknown", "dim"]);
+    rows.push(["Location", phone.connected ? "asking the phone…" : "phone not connected", "dim"]);
   }
   facts($("phone"), rows);
 }

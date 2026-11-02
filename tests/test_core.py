@@ -944,15 +944,15 @@ def test_left_behind_goes_to_discord_if_the_phone_cannot_take_it(tmp_path):
     assert len(sent) == 1 and sent[0].startswith("Tasche zurückgelassen?")
 
 
-def test_sensor_beacon_says_unknown_when_the_phone_cannot_tell():
+def test_sensor_beacon_says_when_the_phone_is_not_connected_or_cannot_tell():
     sensor = presence_module.Presence(KEY, ["desk"])
     state = lambda now: sensor.status(now)["sensors"]["desk"]["phone"]["state"]
-    assert state(NOW) == "unknown"
+    assert state(NOW) == "not_connected"
     sensor.handle_report("phone", {"listening": False, "sightings": []}, NOW)
     assert state(NOW) == "unknown"
     sensor.handle_report("phone", {"listening": True, "sightings": []}, NOW)
     assert state(NOW) == "away"
-    assert state(NOW + presence_module.REPORTER_SILENT_AFTER_SECONDS + 1) == "unknown"
+    assert state(NOW + presence_module.REPORTER_SILENT_AFTER_SECONDS + 1) == "not_connected"
 
 
 def test_sensor_reports_survive_garbage():
@@ -968,7 +968,7 @@ def test_each_listener_has_its_own_view_of_a_sensor():
     sensor.handle_report("laptop", report, NOW)
     status = sensor.status(NOW)["sensors"]["desk"]
     assert status["laptop"]["state"] == "near"
-    assert status["phone"]["state"] == "unknown"
+    assert status["phone"]["state"] == "not_connected"
 
 
 def test_listener_only_talks_to_tailscale_addresses():
