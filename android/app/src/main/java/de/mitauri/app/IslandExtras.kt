@@ -6,7 +6,10 @@ import android.service.notification.StatusBarNotification
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-enum class ActivityKind { CALL, NAVIGATION }
+enum class ActivityKind { CALL, NAVIGATION, ALARM, ELAPSED, PROGRESS }
+
+/** A button the app itself put on its notification, such as Answer, Hang up or Snooze. */
+data class ActivityAction(val title: String, val intent: PendingIntent)
 
 /** A call or a route another app has going. Shown on the phone only, and nothing about it is kept. */
 data class OngoingActivity(
@@ -16,9 +19,11 @@ data class OngoingActivity(
     val detail: String,
     val startedAt: Long? = null, // A call that's still ringing has no start.
     val open: PendingIntent? = null,
+    val progress: Float? = null,
+    val actions: List<ActivityAction> = emptyList(),
 )
 
-enum class AlertKind { CHARGING, LOW_BATTERY, SILENT, VIBRATE, RING, HEADPHONES, UNLOCKED }
+enum class AlertKind { CHARGING, LOW_BATTERY, SILENT, VIBRATE, RING, HEADPHONES, UNLOCKED, FOCUS, SAVER, HOTSPOT }
 
 data class IslandAlert(val kind: AlertKind, val text: String)
 
@@ -31,14 +36,26 @@ fun activityFrom(
     title: String,
     detail: String,
     open: PendingIntent? = null,
+    progress: Float? = null,
+    actions: List<ActivityAction> = emptyList(),
 ): OngoingActivity? {
     if (!ongoing || title.isBlank()) return null
-    return when (category) {
-        Notification.CATEGORY_CALL -> OngoingActivity(ActivityKind.CALL, key, title, detail, whenMillis.takeIf { showsTimer }, open)
-        Notification.CATEGORY_NAVIGATION -> OngoingActivity(ActivityKind.NAVIGATION, key, title, detail, null, open)
-        else -> null
+    val started = whenMillis.takeIf { showsTimer }
+    val kind = when {
+        category == Notification.CATEGORY_CALL -> ActivityKind.CALL
+        category == Notification.CATEGORY_NAVIGATION -> ActivityKind.NAVIGATION
+        category == Notification.CATEGORY_ALARM -> ActivityKind.ALARM
+        category == Notification.CATEGORY_TRANSPORT -> return null // Music has its own place.
+        showsTimer -> ActivityKind.ELAPSED // A stopwatch, or a screen or voice recording.
+        progress != null -> ActivityKind.PROGRESS
+        else -> return null
     }
+    return OngoingActivity(kind, key, title, detail, started, open, progress, actions)
 }
+
+/** How far along a notification's bar is, or null if it has no bar with a real value. */
+fun progressFrom(value: Int, max: Int, indeterminate: Boolean): Float? =
+    if (max > 0 && !indeterminate) (value.toFloat() / max).coerceIn(0f, 1f) else null
 
 /** A running countdown from the clock app or similar. */
 fun countdownFrom(ongoing: Boolean, countsDown: Boolean, whenMillis: Long, now: Long, title: String, detail: String): LiveCountdown? =
@@ -46,6 +63,7 @@ fun countdownFrom(ongoing: Boolean, countsDown: Boolean, whenMillis: Long, now: 
 
 /** Passes other apps' calls, routes and timers to the island. Mitauri's own and protected apps are left out. */
 object IslandNotifications {
+    private const val MAX_ACTIONS = 3
     private var countdownKey: String? = null
 
     fun posted(watcher: NotificationWatcher, sbn: StatusBarNotification) {
@@ -55,7 +73,20 @@ object IslandNotifications {
         val detail = note.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
         val showsTimer = note.extras.getBoolean(Notification.EXTRA_SHOW_CHRONOMETER)
         val countsDown = showsTimer && note.extras.getBoolean(Notification.EXTRA_CHRONOMETER_COUNT_DOWN)
-        val activity = activityFrom(sbn.key, note.category, sbn.isOngoing, showsTimer, note.`when`, title, detail, note.contentIntent)
+        val progress = progressFrom(
+            note.extras.getInt(Notification.EXTRA_PROGRESS),
+            note.extras.getInt(Notification.EXTRA_PROGRESS_MAX),
+            note.extras.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE),
+        )
+        val actions = note.actions.orEmpty()
+            .filter { it.remoteInputs.isNullOrEmpty() && !it.title.isNullOrBlank() && it.actionIntent != null }
+            .take(MAX_ACTIONS)
+            .map { ActivityAction(it.title.toString(), it.actionIntent) }
+        val activity = if (countsDown && note.category != Notification.CATEGORY_CALL) {
+            null
+        } else {
+            activityFrom(sbn.key, note.category, sbn.isOngoing, showsTimer, note.`when`, title, detail, note.contentIntent, progress, actions)
+        }
         if (activity != null) {
             Island.setActivity(watcher, activity)
             return

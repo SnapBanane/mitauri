@@ -99,6 +99,16 @@ class ScreenshotTest {
 
     private fun alert(kind: AlertKind, text: String) = onScreen { Pill(IslandMode.ALERT, "", true, camera = camera, alert = IslandAlert(kind, text)) {} }
 
+    @Test fun islandIdle() = onScreen { Pill(IslandMode.IDLE, "", true, camera = camera) {} }
+    @Test fun islandIdleMic() = onScreen { Pill(IslandMode.IDLE, "", true, camera = camera, indicator = MitauriColors.Warning) {} }
+    @Test fun islandStopwatch() = onScreen {
+        Pill(IslandMode.RUNNING, "", true, clock = { 75_000L }, camera = camera, activity = OngoingActivity(ActivityKind.ELAPSED, "c", "Stopwatch", "", 10_000L)) {}
+    }
+    @Test fun islandProgress() = onScreen {
+        Pill(IslandMode.RUNNING, "", true, camera = camera, activity = OngoingActivity(ActivityKind.PROGRESS, "d", "Update", "", progress = 0.62f)) {}
+    }
+    @Test fun islandFocus() = alert(AlertKind.FOCUS, "Focus")
+    @Test fun islandHotspot() = alert(AlertKind.HOTSPOT, "Hotspot")
     @Test fun islandCharging() = alert(AlertKind.CHARGING, "73%")
     @Test fun islandLowBattery() = alert(AlertKind.LOW_BATTERY, "12%")
     @Test fun islandSilent() = alert(AlertKind.SILENT, "Silent")

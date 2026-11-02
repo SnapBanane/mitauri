@@ -67,6 +67,21 @@ class IslandExtrasTest {
         assertNull(activity("navigation", title = " "))
     }
 
+    @Test fun stopwatchesProgressAndAlarmsCountButMusicAndPlainOnesDoNot() {
+        assertEquals(ActivityKind.ALARM, activity("alarm")?.kind)
+        assertEquals(ActivityKind.ELAPSED, activity(null, timer = true)?.kind)
+        assertEquals(ActivityKind.PROGRESS, activityFrom("k", null, true, false, 0, "Update", "", progress = 0.5f)?.kind)
+        assertNull(activity("transport", timer = true))
+        assertNull(activity("service"))
+    }
+
+    @Test fun progressNeedsARealValue() {
+        assertEquals(0.5f, progressFrom(5, 10, false))
+        assertNull(progressFrom(0, 0, false))
+        assertNull(progressFrom(5, 10, true))
+        assertEquals(1f, progressFrom(50, 10, false))
+    }
+
     @Test fun onlyARunningCountdownCounts() {
         assertEquals("Timer", countdownFrom(true, true, 9_000, 1_000, "", "")?.title)
         assertNull(countdownFrom(true, true, 500, 1_000, "Tea", ""))

@@ -182,7 +182,7 @@ countdown only updates while on screen, and with nothing running, nothing is dra
 screen or saved on the phone, but it comes back when the app reconnects to a running server. Dismissing it on the
 phone stops it coming back, but a reminder set with it still fires.
 
-While Spotify plays, a small pill shows the cover left of the camera and the song name right of it.
+While music plays, a small pill shows the cover left of the camera and the song name right of it.
 Tap for the full text, live bars, previous, pause, next and Hide, which lasts until you next pause. A paused song stays for a minute, and only sound playing on this phone brings it up, so Spotify idling or playing on another device doesn't.
 Its bars follow the music, using only how strong the bass to treble are at that moment, and stop while the screen is
 off. Voice and countdowns take priority. This reads Spotify's media session through the app's notification access, so it
@@ -197,9 +197,14 @@ on the lock screen. Without the service, the pill still shows, but tapping it do
 The pill reads the camera's position from Android and leaves that space free, moving longer text below it. It grows and
 shrinks so it ends just before the nearest status bar icon.
 
-The island also shows calls with their time, routes from a navigation app, and countdowns from other apps. Tap or hold
-to open one, then Open goes to its app. With several going at once, swipe sideways to switch. For a moment it also
-shows charging, low battery, the ringer changing, headphones connecting and unlocking. All of this comes from the phone
+The pill stays around the camera whenever the screen is on, also on the lock screen, where it stays empty apart from
+short alerts. When idle it ignores touches, so the status bar still pulls down through it, and sideways it hides.
+
+The island also shows any app's music, calls with their time and buttons, routes from a navigation app, alarms, countdowns,
+stopwatches, recordings and progress from other apps. Tap or hold to open one, and its buttons and Open appear. With several
+going at once, swipe sideways to switch. On the music window, tapping the top opens the app that's playing. A small dot
+shows while a camera (green) or the microphone (amber) is in use. For a moment it also shows charging, low battery, the
+ringer changing, Do Not Disturb, battery saver, the hotspot, headphones connecting and unlocking. All of this comes from the phone
 itself, stays on the phone and leaves out protected apps.
 
 ## Stocks

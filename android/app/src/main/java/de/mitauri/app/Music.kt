@@ -3,6 +3,7 @@ package de.mitauri.app
 import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.media.MediaMetadata
 import android.media.audiofx.Visualizer
@@ -127,7 +128,7 @@ class MusicSound {
     }
 }
 
-/** Follows Spotify on this phone for the island. Nothing about the song is stored or leaves the phone. */
+/** Follows what's playing on this phone for the island. Nothing about the song is stored or leaves the phone. */
 object Music {
     const val PACKAGE = "com.spotify.music"
     private const val PAUSED_HOLD_MILLIS = 60_000L
@@ -186,20 +187,32 @@ object Music {
                 hidden = true
                 refresh()
             }
-            MusicAction.OPEN -> try {
-                controller?.sessionActivity?.send()
-            } catch (_: PendingIntent.CanceledException) {
-                // Spotify was closed in the same moment, so there's nothing to open.
-            }
+            MusicAction.OPEN -> open()
         }
+    }
+
+    /** Opens the app that's playing, on its song if it says how, and on its start screen if not. */
+    private fun open() {
+        val current = controller ?: return
+        try {
+            current.sessionActivity?.let {
+                it.send()
+                return
+            }
+        } catch (_: PendingIntent.CanceledException) {
+            // It was closed in the same moment, so the start screen is all that's left.
+        }
+        val context = app ?: return
+        context.packageManager.getLaunchIntentForPackage(current.packageName)
+            ?.let { context.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
     }
 
     val isPlaying get() = isPlayingNow()
 
     /** Returns false if Spotify has no session to tell. */
     fun play(): Boolean {
-        val controls = controller?.transportControls ?: return false
-        controls.play()
+        val current = controller?.takeIf { it.packageName == PACKAGE } ?: return false
+        current.transportControls.play()
         return true
     }
 
@@ -207,10 +220,19 @@ object Music {
         controller?.transportControls?.seekTo(millis)
     }
 
-    private fun pick(active: List<MediaController>?) = active?.firstOrNull { it.packageName == PACKAGE }
+    /** Whatever really plays first, then what was already followed, then Spotify, which auto music needs to reach. */
+    private fun pick(active: List<MediaController>?) = active?.let { list ->
+        list.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING && isLocal(it) }
+            ?: list.firstOrNull { it.sessionToken == controller?.sessionToken }
+            ?: list.firstOrNull { it.packageName == PACKAGE }
+    }
+
+    private fun isLocal(session: MediaController) =
+        session.playbackInfo?.playbackType != MediaController.PlaybackInfo.PLAYBACK_TYPE_REMOTE
 
     private fun follow(next: MediaController?) {
         if (next?.sessionToken == controller?.sessionToken) return
+        artSource = null // Another app's song starts without the last one's cover.
         controller?.unregisterCallback(changes)
         presence.reset() // A session that comes back later starts from silence.
         controller = next
@@ -227,8 +249,7 @@ object Music {
     /** Spotify on the laptop also shows as a session here, but it isn't playing on this phone. */
     private fun isSoundingHere(): Boolean {
         val current = controller ?: return false
-        return current.playbackState?.state == PlaybackState.STATE_PLAYING &&
-            current.playbackInfo?.playbackType != MediaController.PlaybackInfo.PLAYBACK_TYPE_REMOTE
+        return current.playbackState?.state == PlaybackState.STATE_PLAYING && isLocal(current)
     }
 
     private fun refresh() {

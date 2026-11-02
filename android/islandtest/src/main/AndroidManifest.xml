@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <application android:label="Island test">
+        <activity
+            android:name=".Post"
+            android:exported="true"
+            android:theme="@android:style/Theme.NoDisplay" />
+        <receiver android:name=".Tapped" android:exported="false" />
+    </application>
+</manifest>
