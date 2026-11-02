@@ -204,7 +204,7 @@ The island also shows any app's music, calls with their time and buttons, routes
 stopwatches, recordings and progress from other apps. Tap or hold to open one, and its buttons and Open appear. With several
 going at once, swipe sideways to switch. On the music window, tapping the top opens the app that's playing. A small dot
 shows while a camera (green) or the microphone (amber) is in use. For a moment it also shows charging, low battery, the
-ringer changing, Do Not Disturb, battery saver, the hotspot, headphones connecting and unlocking. All of this comes from the phone
+ringer changing, silent mode or Do Not Disturb, battery saver, the hotspot, headphones connecting and unlocking. All of this comes from the phone
 itself, stays on the phone and leaves out protected apps.
 
 ## Stocks

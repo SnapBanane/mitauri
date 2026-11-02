@@ -23,7 +23,7 @@ data class OngoingActivity(
     val actions: List<ActivityAction> = emptyList(),
 )
 
-enum class AlertKind { CHARGING, LOW_BATTERY, SILENT, VIBRATE, RING, HEADPHONES, UNLOCKED, FOCUS, SAVER, HOTSPOT }
+enum class AlertKind { CHARGING, LOW_BATTERY, SILENT, VIBRATE, RING, HEADPHONES, UNLOCKED, SAVER, HOTSPOT }
 
 data class IslandAlert(val kind: AlertKind, val text: String)
 

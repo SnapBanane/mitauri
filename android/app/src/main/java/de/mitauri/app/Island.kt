@@ -103,7 +103,6 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
@@ -297,6 +296,7 @@ object Island {
     private var picked: IslandMode? = null // What a sideways swipe chose to see first.
     private var cameraCenter = 0
     private var ringer: Int? = null
+    private var quiet = false
     private val alertOver = Runnable { if (mode == IslandMode.ALERT) hide() }
     private val measure = Runnable { measureRoom() }
     private var expanded by mutableStateOf(false)
@@ -403,9 +403,11 @@ object Island {
             }
             Intent.ACTION_USER_PRESENT -> flash(IslandAlert(AlertKind.UNLOCKED, "Unlocked"), UNLOCK_MILLIS)
             NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED -> {
+                // MIUI's silent switch is Do Not Disturb underneath, so both read as silent. It can say so twice.
                 val on = context.getSystemService(NotificationManager::class.java).currentInterruptionFilter !=
                     NotificationManager.INTERRUPTION_FILTER_ALL
-                flash(IslandAlert(AlertKind.FOCUS, if (on) "Focus" else "Focus off"))
+                if (on != quiet) flash(if (on) IslandAlert(AlertKind.SILENT, "Silent") else IslandAlert(AlertKind.RING, "Ring"))
+                quiet = on
             }
             PowerManager.ACTION_POWER_SAVE_MODE_CHANGED -> {
                 val on = context.getSystemService(PowerManager::class.java).isPowerSaveMode
@@ -536,6 +538,7 @@ object Island {
         } else {
             owner.registerReceiver(receiver, filter)
         }
+        quiet = owner.getSystemService(NotificationManager::class.java).currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL
         watchRecording(owner)
     }
 
@@ -1495,7 +1498,7 @@ private fun AlertContent(alert: IslandAlert, camera: CameraHole) {
         AlertKind.CHARGING, AlertKind.UNLOCKED -> MitauriColors.Success
         AlertKind.LOW_BATTERY -> MitauriColors.Danger
         AlertKind.SILENT, AlertKind.VIBRATE, AlertKind.SAVER -> MitauriColors.Warning
-        AlertKind.RING, AlertKind.HEADPHONES, AlertKind.FOCUS -> MitauriColors.Ink
+        AlertKind.RING, AlertKind.HEADPHONES -> MitauriColors.Ink
         AlertKind.HOTSPOT -> MitauriColors.Success
     }
     AroundCamera(
@@ -1504,15 +1507,6 @@ private fun AlertContent(alert: IslandAlert, camera: CameraHole) {
             when (alert.kind) {
                 AlertKind.SILENT, AlertKind.VIBRATE, AlertKind.RING -> TintedIcon(R.drawable.ic_bell, colour)
                 AlertKind.UNLOCKED -> TintedIcon(R.drawable.ic_lock, colour)
-                AlertKind.FOCUS -> Canvas(Modifier.size(16.dp)) {
-                    val moon = Path().apply {
-                        addOval(androidx.compose.ui.geometry.Rect(Offset(size.width / 2, size.height / 2), size.width / 2))
-                    }
-                    val bite = Path().apply {
-                        addOval(androidx.compose.ui.geometry.Rect(Offset(size.width * 0.72f, size.height * 0.32f), size.width * 0.42f))
-                    }
-                    drawPath(Path.combine(PathOperation.Difference, moon, bite), colour)
-                }
                 AlertKind.HOTSPOT -> Canvas(Modifier.size(16.dp)) {
                     val middle = Offset(size.width / 2, size.height / 2)
                     drawCircle(colour, 2.dp.toPx(), middle)

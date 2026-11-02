@@ -107,7 +107,6 @@ class ScreenshotTest {
     @Test fun islandProgress() = onScreen {
         Pill(IslandMode.RUNNING, "", true, camera = camera, activity = OngoingActivity(ActivityKind.PROGRESS, "d", "Update", "", progress = 0.62f)) {}
     }
-    @Test fun islandFocus() = alert(AlertKind.FOCUS, "Focus")
     @Test fun islandHotspot() = alert(AlertKind.HOTSPOT, "Hotspot")
     @Test fun islandCharging() = alert(AlertKind.CHARGING, "73%")
     @Test fun islandLowBattery() = alert(AlertKind.LOW_BATTERY, "12%")
