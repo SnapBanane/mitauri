@@ -93,7 +93,20 @@ class ScreenshotTest {
     private val routeStep = OngoingActivity(ActivityKind.NAVIGATION, "b", "In 200 m rechts", "Hauptstraße, noch 12 min")
 
     @Test fun islandCall() = onScreen { Pill(IslandMode.CALL, "", true, clock = { 75_000L }, camera = camera, activity = answered) {} }
-    @Test fun islandIncoming() = onScreen { Pill(IslandMode.CALL, "", true, camera = camera, activity = answered.copy(startedAt = null)) {} }
+    @Test fun islandIncoming() = onScreen { Pill(IslandMode.CALL, "", true, camera = camera, activity = answered.copy(startedAt = null, incoming = true)) {} }
+    @Test fun islandCalling() = onScreen { Pill(IslandMode.CALL, "", true, camera = camera, activity = answered.copy(startedAt = null)) {} }
+
+    private fun button(title: String) = ActivityAction(title, null)
+
+    @Test fun islandIncomingExpanded() = onScreen {
+        val ringing = answered.copy(startedAt = null, incoming = true, actions = listOf(button("Decline"), button("Answer")))
+        Pill(IslandMode.CALL, "", true, expanded = true, camera = camera, activity = ringing) {}
+    }
+    @Test fun islandCallExpandedWithButtons() = onScreen {
+        val talking = answered.copy(actions = listOf(button("Speaker"), button("Mute"), button("Hang up")))
+        Pill(IslandMode.CALL, "", true, expanded = true, clock = { 75_000L }, camera = camera, activity = talking) {}
+    }
+    @Test fun islandRouteExpanded() = onScreen { Pill(IslandMode.NAVIGATION, "", true, expanded = true, camera = camera, activity = routeStep) {} }
     @Test fun islandCallExpanded() = onScreen { Pill(IslandMode.CALL, "", true, expanded = true, clock = { 75_000L }, camera = camera, activity = answered) {} }
     @Test fun islandRoute() = onScreen { Pill(IslandMode.NAVIGATION, "", true, camera = camera, activity = routeStep) {} }
 

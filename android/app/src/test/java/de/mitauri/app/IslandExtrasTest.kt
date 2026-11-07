@@ -59,6 +59,26 @@ class IslandExtrasTest {
         assertEquals(5_000L, activity("call", timer = true)?.startedAt)
     }
 
+    @Test fun aCallThisPhoneMakesIsNotIncoming() {
+        assertTrue(isIncomingCall(1, false)) // CallStyle says ringing in.
+        assertFalse(isIncomingCall(2, true)) // CallStyle says ongoing, whatever else the notification has.
+        assertTrue(isIncomingCall(0, true)) // No CallStyle: only a ringing call takes the whole screen.
+        assertFalse(isIncomingCall(0, false))
+        assertTrue(activityFrom("k", "call", true, false, 0, "Max", "", incoming = true)!!.incoming)
+        assertFalse(activityFrom("k", "call", true, true, 0, "Max", "", incoming = true)!!.incoming) // Answered.
+        assertFalse(activityFrom("k", "call", true, false, 0, "Max", "")!!.incoming)
+    }
+
+    @Test fun callButtonsAreKnownByTheirTitles() {
+        assertEquals(ActionRole.ANSWER, actionRole("Answer"))
+        assertEquals(ActionRole.ANSWER, actionRole("Annehmen"))
+        assertEquals(ActionRole.END, actionRole("Hang up"))
+        assertEquals(ActionRole.END, actionRole("Ablehnen"))
+        assertEquals(ActionRole.END, actionRole("Auflegen"))
+        assertEquals(ActionRole.OTHER, actionRole("Speaker"))
+        assertEquals(ActionRole.OTHER, actionRole("Send message"))
+    }
+
     @Test fun onlyOngoingCallsAndRoutesCount() {
         assertEquals(ActivityKind.NAVIGATION, activity("navigation")?.kind)
         assertNull(activity("call", ongoing = false)) // A missed call.

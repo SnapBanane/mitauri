@@ -9,7 +9,22 @@ import androidx.compose.ui.unit.dp
 enum class ActivityKind { CALL, NAVIGATION, ALARM, ELAPSED, PROGRESS }
 
 /** A button the app itself put on its notification, such as Answer, Hang up or Snooze. */
-data class ActivityAction(val title: String, val intent: PendingIntent)
+data class ActivityAction(val title: String, val intent: PendingIntent?)
+
+enum class ActionRole { ANSWER, END, OTHER }
+
+private val ANSWER_WORDS = setOf("answer", "accept", "annehmen", "rangehen")
+private val END_WORDS = setOf("decline", "reject", "hangup", "end", "ablehnen", "auflegen", "beenden", "abweisen")
+
+/** Which of a call's buttons picks up and which ends it, from its title, as apps don't say so any other way. */
+fun actionRole(title: String): ActionRole {
+    val words = title.lowercase().replace("hang up", "hangup").split(Regex("[^\\p{L}]+")).toSet()
+    return when {
+        words.any { it in ANSWER_WORDS } -> ActionRole.ANSWER
+        words.any { it in END_WORDS } -> ActionRole.END
+        else -> ActionRole.OTHER
+    }
+}
 
 /** A call or a route another app has going. Shown on the phone only, and nothing about it is kept. */
 data class OngoingActivity(
@@ -17,11 +32,25 @@ data class OngoingActivity(
     val key: String,
     val title: String,
     val detail: String,
-    val startedAt: Long? = null, // A call that's still ringing has no start.
+    val startedAt: Long? = null, // A call that's still ringing or dialling has no start.
     val open: PendingIntent? = null,
     val progress: Float? = null,
     val actions: List<ActivityAction> = emptyList(),
+    val incoming: Boolean = false, // Only for a call: someone is ringing this phone, rather than this phone calling out.
 )
+
+/** Android's CallStyle says which way a call goes. Without it, only a ringing call takes over the screen. */
+fun isIncomingCall(callType: Int, hasFullScreenIntent: Boolean): Boolean = when (callType) {
+    CALL_TYPE_INCOMING, CALL_TYPE_SCREENING -> true
+    CALL_TYPE_ONGOING -> false
+    else -> hasFullScreenIntent
+}
+
+// Notification.CALL_TYPE_*, here so they work below Android 12 too.
+const val EXTRA_CALL_TYPE = "android.callType"
+private const val CALL_TYPE_INCOMING = 1
+private const val CALL_TYPE_ONGOING = 2
+private const val CALL_TYPE_SCREENING = 3
 
 enum class AlertKind { CHARGING, LOW_BATTERY, SILENT, VIBRATE, RING, HEADPHONES, UNLOCKED, SAVER, HOTSPOT }
 
@@ -38,6 +67,7 @@ fun activityFrom(
     open: PendingIntent? = null,
     progress: Float? = null,
     actions: List<ActivityAction> = emptyList(),
+    incoming: Boolean = false,
 ): OngoingActivity? {
     if (!ongoing || title.isBlank()) return null
     val started = whenMillis.takeIf { showsTimer }
@@ -50,7 +80,7 @@ fun activityFrom(
         progress != null -> ActivityKind.PROGRESS
         else -> return null
     }
-    return OngoingActivity(kind, key, title, detail, started, open, progress, actions)
+    return OngoingActivity(kind, key, title, detail, started, open, progress, actions, incoming && kind == ActivityKind.CALL && started == null)
 }
 
 /** How far along a notification's bar is, or null if it has no bar with a real value. */
@@ -85,7 +115,8 @@ object IslandNotifications {
         val activity = if (countsDown && note.category != Notification.CATEGORY_CALL) {
             null
         } else {
-            activityFrom(sbn.key, note.category, sbn.isOngoing, showsTimer, note.`when`, title, detail, note.contentIntent, progress, actions)
+            val incoming = isIncomingCall(note.extras.getInt(EXTRA_CALL_TYPE, 0), note.fullScreenIntent != null)
+            activityFrom(sbn.key, note.category, sbn.isOngoing, showsTimer, note.`when`, title, detail, note.contentIntent, progress, actions, incoming)
         }
         if (activity != null) {
             Island.setActivity(watcher, activity)

@@ -399,7 +399,8 @@ object Mitauri {
                         webSocket.send(JSONObject().put("result", result).put("type", "answer").put("id", data.getString("id")).toString())
                     }
                 }
-                "open_door", "read_notifications", "ask_to_reply", "add_place_reminder", "list_place_reminders", "remove_place_reminder" -> safely { answerRequest(webSocket, data) }
+                "open_door", "read_notifications", "ask_to_reply", "add_place_reminder", "list_place_reminders", "remove_place_reminder",
+                "add_quiet_place", "list_quiet_places", "remove_quiet_place" -> safely { answerRequest(webSocket, data) }
                 "ring", "notify", "alarm", "alarm_over", "live_show", "live_clear" -> {
                     // Tells the server it arrived, so it can fall back to Discord if it didn't.
                     webSocket.send(JSONObject().put("type", "ack").put("id", data.optString("id")).toString())
@@ -453,7 +454,10 @@ object Mitauri {
         if (status != Status.CONNECTED) return
         val sightings = JSONArray()
         heard.forEach { (payload, rssi) -> sightings.put(JSONObject().put("p", payload).put("r", rssi)) }
-        val body = JSONObject().put("listening", listening).put("sightings", sightings).toString().toByteArray()
+        // Only whether the phone is at one of the quiet places, never which, so the server can't tell where it is.
+        val body = JSONObject().put("listening", listening).put("sightings", sightings)
+            .apply { if (QuietPlaces.isInsideAny()) put("paused", true) }
+            .toString().toByteArray()
         val request = signedRequest("presence-report", "POST", body).build()
         Thread {
             try {
@@ -526,6 +530,12 @@ object Mitauri {
             )
             "list_place_reminders" -> JSONObject().put("items", PlaceReminders.list(app))
             "remove_place_reminder" -> JSONObject().put("removed", PlaceReminders.remove(app, data.getString("reminder")))
+            "add_quiet_place" -> JSONObject().put(
+                "result",
+                QuietPlaces.add(app, data.getString("name"), data.getDouble("latitude"), data.getDouble("longitude"), data.getDouble("radius").toFloat()),
+            )
+            "list_quiet_places" -> QuietPlaces.list(app)
+            "remove_quiet_place" -> JSONObject().put("removed", QuietPlaces.remove(app, data.getString("place")))
             else -> JSONObject().put("result", NotificationAccess.askToReply(app, data.getString("notification"), data.getString("text")))
         }
         webSocket.send(answer.put("type", "answer").put("id", data.getString("id")).toString())

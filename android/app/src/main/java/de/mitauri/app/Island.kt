@@ -173,7 +173,11 @@ private val PILL_MAX_RADIUS = 30.dp
 private val CAMERA_MARGIN = 2.dp
 private val BELOW_CAMERA = 40.dp // Expanded content starts here, clear of the camera.
 private val SWIPE_DISTANCE = 18.dp
-private val IDLE_SIDE = 14.dp
+// Idle, the pill is only a little larger than the camera, about the height of the status bar's icons.
+private val IDLE_WIDTH = 50.dp
+private val IDLE_HEIGHT = 24.dp
+private val EXPANDED_WIDTH = PILL_MAX_WIDTH - 24.dp
+private val ROUND_BUTTON = 44.dp
 private val LIVE_DOT_ROOM = 17.dp
 private val MIN_LIVE_TITLE = 34.dp
 private const val NOW_HOLD_MILLIS = 60_000L
@@ -342,7 +346,7 @@ object Island {
 
     fun setActivity(context: Context, activity: OngoingActivity) {
         attach(context)
-        val ringing = activity.kind == ActivityKind.CALL && activity.startedAt == null && call?.key != activity.key
+        val ringing = activity.kind == ActivityKind.CALL && activity.incoming && call?.key != activity.key
         when (activity.kind) {
             ActivityKind.CALL -> call = activity
             ActivityKind.NAVIGATION -> route = activity
@@ -906,6 +910,14 @@ fun Pill(
     val swipeDistance = with(density) { SWIPE_DISTANCE.toPx() }
     val maxRadius = with(density) { PILL_MAX_RADIUS.toPx() }
     val sound = rememberBarLevels(mode == IslandMode.MUSIC && music?.playing == true)
+    // The window puts the pill's top where a full-height row is centred on the camera. The smaller idle pill moves
+    // down by half the difference, so it's centred on the camera too.
+    val idleDrop = with(density) { ((ROW_HEIGHT + PILL_EDGE * 2 - IDLE_HEIGHT) / 2).toPx() }
+    val drop by animateFloatAsState(
+        if (mode == IslandMode.IDLE && shown) idleDrop else 0f,
+        spring(dampingRatio = 0.9f, stiffness = 320f),
+        label = "drop",
+    )
 
     Layout(
         content = {
@@ -921,14 +933,14 @@ fun Pill(
                     label = "content",
                 ) { (shownMode, open) ->
                     Column(
-                        Modifier.padding(horizontal = 12.dp, vertical = PILL_EDGE),
+                        if (shownMode == IslandMode.IDLE) Modifier else Modifier.padding(horizontal = 12.dp, vertical = PILL_EDGE),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         when {
                             shownMode == IslandMode.LIVE && live != null -> LiveContent(live, open, camera, clock, onExpired, onDismiss)
                             shownMode == IslandMode.MUSIC && music != null ->
                                 if (open) MusicExpanded(music, sound, onMusic, onSeek) else MusicCompact(music, sound, camera)
-                            shownMode == IslandMode.IDLE -> AroundCamera(camera, { Spacer(Modifier.width(IDLE_SIDE)) }, { Spacer(Modifier.width(IDLE_SIDE)) })
+                            shownMode == IslandMode.IDLE -> Spacer(Modifier.size(IDLE_WIDTH, IDLE_HEIGHT))
                             (shownMode == IslandMode.CALL || shownMode == IslandMode.NAVIGATION || shownMode == IslandMode.RUNNING) && activity != null ->
                                 ActivityContent(activity, open, camera, clock, onOpen, onAction)
                             shownMode == IslandMode.ALERT && alert != null -> AlertContent(alert, camera)
@@ -942,6 +954,7 @@ fun Pill(
         modifier = Modifier
             .graphicsLayer {
                 transformOrigin = TransformOrigin(0.5f, 0f)
+                translationY = drop
                 scaleX = press
                 scaleY = press
                 alpha = fade.value
@@ -953,7 +966,8 @@ fun Pill(
                 drawContent()
                 val dot = indicator ?: return@drawWithContent
                 val radius = 2.5.dp.toPx()
-                drawCircle(dot, radius, Offset(size.width - 9.dp.toPx(), (ROW_HEIGHT / 2 + PILL_EDGE).toPx()))
+                val middle = min((ROW_HEIGHT / 2 + PILL_EDGE).toPx(), size.height / 2) // The small idle pill's middle.
+                drawCircle(dot, radius, Offset(size.width - min(9.dp.toPx(), middle), middle))
             }
             .pointerInput(Unit) {
                 detectTapGestures(
@@ -996,7 +1010,10 @@ fun Pill(
     }
 }
 
-/** Two sides of equal width with the camera's width free between them, so the camera stays in the middle. */
+/**
+ * Two sides of equal width with the camera's width free between them, so the camera stays in the middle. As on the
+ * iPhone, the start sits at the pill's left end and the end at its right end, never in a gap beside the camera.
+ */
 @Composable
 private fun AroundCamera(camera: CameraHole, start: @Composable () -> Unit, end: @Composable () -> Unit) {
     Layout(
@@ -1013,8 +1030,8 @@ private fun AroundCamera(camera: CameraHole, start: @Composable () -> Unit, end:
         val side = maxOf(left.width, right.width)
         val height = maxOf(left.height, right.height, constraints.minHeight)
         layout(side * 2 + gap, height) {
-            left.place(side - left.width, (height - left.height) / 2)
-            right.place(side + gap, (height - right.height) / 2)
+            left.place(0, (height - left.height) / 2)
+            right.place(side * 2 + gap - right.width, (height - right.height) / 2)
         }
     }
 }
@@ -1050,40 +1067,126 @@ private fun LiveContent(
     }
     val left = live.untilMillis - now
     val colour = if (left <= 0) MitauriColors.Warning else MitauriColors.Accent
+    if (expanded) {
+        ExpandedCard(
+            leading = { Canvas(Modifier.size(12.dp)) { drawCircle(colour) } },
+            title = live.title,
+            status = { StatusLine(countdownText(left), colour, live.detail) },
+            buttons = { Chip("Dismiss", onDismiss, primary = true) },
+        )
+        return
+    }
     AroundCamera(
         camera,
         {
-            Canvas(Modifier.padding(end = 8.dp).size(9.dp)) { drawCircle(colour) }
+            Canvas(Modifier.padding(start = 2.dp, end = 8.dp).size(9.dp)) { drawCircle(colour) }
             Label(live.title, modifier = Modifier.widthIn(max = (camera.side - LIVE_DOT_ROOM).coerceAtLeast(MIN_LIVE_TITLE)))
         },
-        {
-            Text(
-                countdownText(left),
-                color = colour,
-                maxLines = 1,
-                style = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.SemiBold, fontFeatureSettings = "tnum"),
-            )
-        },
+        { Figure(countdownText(left), colour) },
     )
-    if (expanded) {
-        Text(live.title, Modifier.padding(top = 10.dp), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        if (live.detail.isNotBlank()) {
+}
+
+/** A number in the pill, like a countdown, a call's time or a percentage. Its digits keep their width as it counts. */
+@Composable
+private fun Figure(text: String, colour: Color, modifier: Modifier = Modifier) = Text(
+    text,
+    modifier,
+    color = colour,
+    maxLines = 1,
+    style = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.SemiBold, fontFeatureSettings = "tnum"),
+)
+
+/**
+ * The open pill, laid out like the open song: below the camera, the thing's icon on the left with what it is beside it,
+ * any round buttons on the right, and the rest of its buttons underneath. Tapping the words opens its app.
+ */
+@Composable
+private fun ExpandedCard(
+    leading: @Composable () -> Unit,
+    title: String,
+    status: @Composable () -> Unit,
+    onOpen: (() -> Unit)? = null,
+    trailing: @Composable () -> Unit = {},
+    buttons: (@Composable () -> Unit)? = null,
+) {
+    Column(Modifier.width(EXPANDED_WIDTH).padding(start = 8.dp, end = 8.dp, bottom = 8.dp)) {
+        Row(Modifier.fillMaxWidth().padding(top = BELOW_CAMERA), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier.weight(1f).then(
+                    if (onOpen == null) Modifier else Modifier.clickable(remember { MutableInteractionSource() }, null, onClick = onOpen),
+                ),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier.size(44.dp).clip(RoundedCornerShape(50)).background(Color.White.copy(alpha = 0.1f)),
+                    contentAlignment = Alignment.Center,
+                ) { leading() }
+                Column(Modifier.padding(start = 12.dp, end = 8.dp)) {
+                    Text(title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    status()
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) { trailing() }
+        }
+        if (buttons != null) {
+            Row(
+                Modifier.fillMaxWidth().padding(top = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
+            ) { buttons() }
+        }
+    }
+}
+
+/** The line under an open pill's title: how far along it is, in its colour, then any detail from the app. */
+@Composable
+private fun StatusLine(state: String, colour: Color, detail: String = "") {
+    Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (state.isNotEmpty()) {
+            Text(state, color = colour, maxLines = 1, style = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Medium, fontFeatureSettings = "tnum"))
+        }
+        if (detail.isNotBlank()) {
             Text(
-                live.detail,
-                Modifier.padding(top = 4.dp),
+                if (state.isEmpty()) detail else " · $detail",
                 color = MitauriColors.Muted,
                 fontSize = 13.sp,
-                lineHeight = 18.sp,
-                maxLines = 3,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Text(
-            "Dismiss",
-            Modifier.padding(top = 6.dp, bottom = 4.dp).clickable(onClick = onDismiss).padding(vertical = 6.dp, horizontal = 12.dp),
-            color = MitauriColors.AccentSoft,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Medium,
+    }
+}
+
+@Composable
+private fun Chip(title: String, onClick: () -> Unit, primary: Boolean = false) = Text(
+    title,
+    Modifier
+        .clip(RoundedCornerShape(50))
+        .background(if (primary) MitauriColors.Accent.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.14f))
+        .clickable(onClick = onClick)
+        .padding(horizontal = 14.dp, vertical = 7.dp),
+    color = if (primary) MitauriColors.AccentSoft else Color.White,
+    fontSize = 14.sp,
+    fontWeight = FontWeight.Medium,
+    maxLines = 1,
+)
+
+/** Green to pick up and red to end, as on every phone. The receiver tips over for ending. */
+@Composable
+private fun CallButton(role: ActionRole, title: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(ROUND_BUTTON)
+            .clip(RoundedCornerShape(50))
+            .background(if (role == ActionRole.ANSWER) MitauriColors.Success else MitauriColors.Danger)
+            .clickable(onClickLabel = title, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Image(
+            painterResource(R.drawable.ic_call),
+            title,
+            Modifier.size(22.dp).graphicsLayer { rotationZ = if (role == ActionRole.END) 135f else 0f },
+            colorFilter = ColorFilter.tint(Color.White),
         )
     }
 }
@@ -1405,70 +1508,78 @@ private fun ActivityContent(
         ActivityKind.ALARM -> MitauriColors.Warning
         else -> MitauriColors.AccentSoft
     }
+    val progress = "${((activity.progress ?: 0f) * 100).roundToInt()}%"
+    if (expanded) {
+        // A call's answer and end buttons are round and on the right. Speaker, mute and the like go underneath.
+        val (round, others) = activity.actions.partition { isCall && actionRole(it.title) != ActionRole.OTHER }
+        val buttons: @Composable () -> Unit = {
+            others.forEach { action -> Chip(action.title, { onAction(action) }) }
+            if (!isCall) Chip("Open", { onOpen(activity) }, primary = true)
+        }
+        ExpandedCard(
+            leading = { ActivityIcon(activity, colour, 20.dp) },
+            title = activity.title,
+            status = {
+                when {
+                    isCall || activity.kind == ActivityKind.ELAPSED -> StatusLine(elapsed(activity, clock), colour, activity.detail)
+                    activity.kind == ActivityKind.PROGRESS -> StatusLine(progress, colour, activity.detail)
+                    else -> StatusLine("", colour, activity.detail)
+                }
+            },
+            onOpen = { onOpen(activity) },
+            trailing = { round.forEach { action -> CallButton(actionRole(action.title), action.title) { onAction(action) } } },
+            buttons = buttons.takeIf { others.isNotEmpty() || !isCall },
+        )
+        return
+    }
     AroundCamera(
         camera,
-        {
-            when (activity.kind) {
-                ActivityKind.CALL -> TintedIcon(R.drawable.ic_call, colour)
-                ActivityKind.ALARM -> TintedIcon(R.drawable.ic_bell, colour)
-                ActivityKind.ELAPSED -> Canvas(Modifier.size(9.dp)) { drawCircle(colour) }
-                ActivityKind.PROGRESS -> Canvas(Modifier.size(16.dp)) {
-                    val stroke = Stroke(2.5.dp.toPx(), cap = StrokeCap.Round)
-                    drawCircle(Color.White.copy(alpha = 0.22f), style = stroke)
-                    drawArc(colour, -90f, 360f * (activity.progress ?: 0f), false, style = stroke)
-                }
-                ActivityKind.NAVIGATION -> Canvas(Modifier.size(16.dp)) {
-                    drawPath(
-                        Path().apply {
-                            moveTo(size.width / 2, 0f)
-                            lineTo(size.width, size.height)
-                            lineTo(size.width / 2, size.height * 0.72f)
-                            lineTo(0f, size.height)
-                            close()
-                        },
-                        colour,
-                    )
-                }
-            }
-        },
+        { ActivityIcon(activity, colour, 16.dp) },
         {
             when {
-                isCall || activity.kind == ActivityKind.ELAPSED -> CallTime(activity, colour, camera, clock)
-                activity.kind == ActivityKind.PROGRESS -> Label("${((activity.progress ?: 0f) * 100).roundToInt()}%", colour)
+                isCall || activity.kind == ActivityKind.ELAPSED -> Figure(elapsed(activity, clock), colour, Modifier.widthIn(max = camera.side + VOICE_TEXT_EXTRA))
+                activity.kind == ActivityKind.PROGRESS -> Figure(progress, colour)
                 else -> SongTitle(activity.title, Modifier.widthIn(max = camera.side), 14)
             }
         },
     )
-    if (expanded) {
-        Text(activity.title, Modifier.padding(top = 10.dp), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        if (activity.detail.isNotBlank()) {
-            Text(activity.detail, Modifier.padding(top = 4.dp), color = MitauriColors.Muted, fontSize = 13.sp, lineHeight = 18.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+}
+
+@Composable
+private fun ActivityIcon(activity: OngoingActivity, colour: Color, iconSize: Dp) {
+    when (activity.kind) {
+        ActivityKind.CALL -> TintedIcon(R.drawable.ic_call, colour, iconSize)
+        ActivityKind.ALARM -> TintedIcon(R.drawable.ic_bell, colour, iconSize)
+        ActivityKind.ELAPSED -> Canvas(Modifier.padding(start = 2.dp).size(iconSize * 0.6f)) { drawCircle(colour) }
+        ActivityKind.PROGRESS -> Canvas(Modifier.size(iconSize)) {
+            val stroke = Stroke(size.width * 0.16f, cap = StrokeCap.Round)
+            drawCircle(Color.White.copy(alpha = 0.22f), style = stroke)
+            drawArc(colour, -90f, 360f * (activity.progress ?: 0f), false, style = stroke)
         }
-        Row(Modifier.padding(top = 6.dp, bottom = 4.dp)) {
-            activity.actions.forEach { action -> ActivityButton(action.title) { onAction(action) } }
-            ActivityButton("Open") { onOpen(activity) }
+        ActivityKind.NAVIGATION -> Canvas(Modifier.size(iconSize)) {
+            val w = size.width
+            val h = size.height
+            drawPath(
+                Path().apply {
+                    moveTo(w / 2, 0f)
+                    lineTo(w, h)
+                    lineTo(w / 2, h * 0.72f)
+                    lineTo(0f, h)
+                    close()
+                },
+                colour,
+            )
         }
     }
 }
 
+/**
+ * A call's time once answered, or which way it's still going: ringing in, or this phone calling out. Updates once a
+ * second at most, like the countdown.
+ */
 @Composable
-private fun ActivityButton(title: String, onClick: () -> Unit) = Text(
-    title,
-    Modifier.clickable(onClick = onClick).padding(vertical = 6.dp, horizontal = 12.dp),
-    color = MitauriColors.AccentSoft,
-    fontSize = 14.sp,
-    fontWeight = FontWeight.Medium,
-    maxLines = 1,
-)
-
-/** Updates once a second at most, like the countdown. */
-@Composable
-private fun CallTime(activity: OngoingActivity, colour: Color, camera: CameraHole, clock: () -> Long) {
-    val started = activity.startedAt
-    if (started == null) {
-        Label("Incoming", colour, Modifier.widthIn(max = camera.side + VOICE_TEXT_EXTRA))
-        return
-    }
+private fun elapsed(activity: OngoingActivity, clock: () -> Long): String {
+    val started = activity.startedAt ?: return if (activity.incoming) "Incoming" else "Calling"
     var now by remember(started) { mutableLongStateOf(clock()) }
     LaunchedEffect(started) {
         while (isActive) {
@@ -1476,19 +1587,14 @@ private fun CallTime(activity: OngoingActivity, colour: Color, camera: CameraHol
             now = clock()
         }
     }
-    Text(
-        songTime(now - started),
-        color = colour,
-        maxLines = 1,
-        style = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.SemiBold, fontFeatureSettings = "tnum"),
-    )
+    return songTime(now - started)
 }
 
 @Composable
-private fun TintedIcon(icon: Int, colour: Color) = Image(
+private fun TintedIcon(icon: Int, colour: Color, size: Dp = 16.dp) = Image(
     painterResource(icon),
     null,
-    Modifier.size(16.dp),
+    Modifier.size(size),
     colorFilter = ColorFilter.tint(colour),
 )
 
@@ -1544,7 +1650,8 @@ private fun AlertContent(alert: IslandAlert, camera: CameraHole) {
                 }
             }
         },
-        { Label(alert.text, colour, Modifier.widthIn(max = camera.side + VOICE_TEXT_EXTRA)) },
+        // Only there for a moment, so it may reach past the status bar's icons rather than cut its words short.
+        { Label(alert.text, colour, Modifier.widthIn(max = MAX_SIDE)) },
     )
 }
 

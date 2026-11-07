@@ -697,8 +697,18 @@ def test_place_reminder_tool_clamps_radius_and_reports_the_place(monkeypatch):
     assert "Not set" in tools.remind_at_place("x" * 501, "Rewe")
 
 
+def test_quiet_place_tool_clamps_radius_and_reports_the_place(monkeypatch):
+    sent = {}
+    monkeypatch.setattr(places_module, "_closest_place", lambda name, allow_far: ({"latitude": 48.1, "longitude": 11.5, "name": "Schule, München"}, ""))
+    monkeypatch.setattr(toolbox, "ask_server", lambda path, body=None: sent.update(body, path=path) or {"result": "Added."})
+    answer = tools.add_quiet_place("Schule", "Schule München", radius_metres=5000)
+    assert "Schule, München" in answer and sent["radius"] == 1000 and sent["path"] == "/quiet-places"
+    monkeypatch.setattr(toolbox, "ask_server", lambda path, body=None: {"error": "no location"} if path == "/location" else {})
+    assert tools.add_quiet_place("Hier").startswith("Not added")
+
+
 def test_place_tools_are_not_on_discord():
-    assert not tools.LIMITED_TOOLS & {"remind_at_place", "list_place_reminders", "cancel_place_reminder"}
+    assert not tools.LIMITED_TOOLS & {"remind_at_place", "list_place_reminders", "cancel_place_reminder", "add_quiet_place", "remove_quiet_place"}
 
 
 def fake_places(monkeypatch, by_box):
@@ -887,44 +897,74 @@ def bag_report(counter):
     return {"listening": True, "sightings": [{"p": presence_module.private_beacon_payload(key, counter).hex(), "r": -60}]}
 
 
-def empty_report(listening=True):
-    return {"listening": listening, "sightings": []}
+def empty_report(listening=True, paused=False):
+    return {"listening": listening, "sightings": [], **({"paused": True} if paused else {})}
 
 
-def test_left_behind_warns_once_after_two_minutes_and_again_after_being_heard():
+def misses(sensor, start, count, **kwargs):
+    """The phone reports, once a minute, without hearing the bag. Returns when the last one came."""
+    for minute in range(1, count + 1):
+        sensor.handle_report("phone", empty_report(**kwargs), start + 60 * minute)
+    return start + 60 * count
+
+
+def test_left_behind_warns_once_after_three_misses_and_again_after_being_heard():
     sensor = presence_module.Presence(KEY, ["bag"], ["bag"])
     sensor.handle_report("phone", bag_report(1), NOW)
-    sensor.handle_report("phone", empty_report(), NOW + 60)
-    assert sensor.newly_left_behind(NOW + 119) == []
-    sensor.handle_report("phone", empty_report(), NOW + 120)
-    assert sensor.newly_left_behind(NOW + 120) == ["bag"]
-    assert sensor.newly_left_behind(NOW + 130) == []
-    sensor.handle_report("phone", bag_report(2), NOW + 180)
-    assert sensor.newly_left_behind(NOW + 180) == []
-    sensor.handle_report("phone", empty_report(), NOW + 300)
-    assert sensor.newly_left_behind(NOW + 300) == ["bag"]
+    later = misses(sensor, NOW, 2)
+    assert sensor.newly_left_behind(later) == []
+    later = misses(sensor, later, 1)
+    assert sensor.newly_left_behind(later) == ["bag"]
+    assert sensor.newly_left_behind(later + 10) == []
+    sensor.handle_report("phone", bag_report(2), later + 60)
+    later = misses(sensor, later + 60, 3)
+    assert sensor.newly_left_behind(later) == ["bag"]
 
 
-def test_laptop_hearing_the_bag_counts_as_within_reach():
+def test_a_single_missed_scan_does_not_warn():
+    sensor = presence_module.Presence(KEY, ["bag"], ["bag"])
+    later = NOW
+    for counter in range(1, 20):  # heard, missed twice, heard, as a phone in a pocket does
+        sensor.handle_report("phone", bag_report(counter), later)
+        later = misses(sensor, later, 2) + 60
+        assert sensor.newly_left_behind(later) == []
+
+
+def test_laptop_hearing_the_bag_does_not_count_as_with_the_user():
+    # The bag left at home beside the laptop is exactly the case to warn about.
     sensor = presence_module.Presence(KEY, ["bag"], ["bag"])
     sensor.handle_report("phone", bag_report(1), NOW)
-    sensor.handle_report("laptop", bag_report(2), NOW + 100)
-    sensor.handle_report("phone", empty_report(), NOW + 125)
-    assert sensor.newly_left_behind(NOW + 125) == []
-    sensor.handle_report("phone", empty_report(), NOW + 220)
-    assert sensor.newly_left_behind(NOW + 220) == ["bag"]
+    for minute in range(1, 4):
+        sensor.handle_report("laptop", bag_report(1 + minute), NOW + 60 * minute - 5)
+        sensor.handle_report("phone", empty_report(), NOW + 60 * minute)
+    assert sensor.newly_left_behind(NOW + 180) == ["bag"]
+
+
+def test_quiet_places_pause_the_check_and_leaving_starts_it_afresh():
+    sensor = presence_module.Presence(KEY, ["bag"], ["bag"])
+    sensor.handle_report("phone", bag_report(1), NOW)
+    later = misses(sensor, NOW, 2)
+    later = misses(sensor, later, 30, paused=True)  # home, with the bag in another room
+    assert sensor.newly_left_behind(later) == []
+    later = misses(sensor, later, 2)  # just left
+    assert sensor.newly_left_behind(later) == []
+    later = misses(sensor, later, 1)
+    assert sensor.newly_left_behind(later) == ["bag"]
 
 
 def test_left_behind_stays_quiet_when_the_phone_cannot_tell():
     sensor = presence_module.Presence(KEY, ["bag"], ["bag"])
-    sensor.handle_report("laptop", empty_report(), NOW)
-    assert sensor.newly_left_behind(NOW + 500) == []  # never heard since starting
-    sensor.handle_report("phone", bag_report(1), NOW)
-    assert sensor.newly_left_behind(NOW + 300) == []  # the phone hasn't reported since
-    sensor.handle_report("phone", empty_report(listening=False), NOW + 300)
-    assert sensor.newly_left_behind(NOW + 300) == []  # Bluetooth is off
-    sensor.handle_report("phone", empty_report(), NOW + 300)
-    assert sensor.newly_left_behind(NOW + 300 + presence_module.PHONE_REPORT_FRESH_SECONDS + 1) == []  # gone quiet
+    sensor.handle_report("laptop", bag_report(1), NOW)
+    assert sensor.newly_left_behind(misses(sensor, NOW, 5)) == []  # the phone never heard it since starting
+    sensor.handle_report("phone", bag_report(2), NOW + 400)
+    later = misses(sensor, NOW + 400, 5, listening=False)  # Bluetooth is off
+    assert sensor.newly_left_behind(later) == []
+    later = misses(sensor, later, 2)
+    later = misses(sensor, later, 1, listening=False)  # an off moment resets the count
+    later = misses(sensor, later, 2)
+    assert sensor.newly_left_behind(later) == []
+    later = misses(sensor, later, 1)
+    assert sensor.newly_left_behind(later + presence_module.PHONE_REPORT_FRESH_SECONDS + 1) == []  # gone quiet
 
 
 def test_only_watched_beacons_warn():
@@ -1324,7 +1364,7 @@ def test_all_tools_still_exist_and_discord_only_gets_the_safe_ones(tmp_path):
         env={**os.environ, "MITAURI_DATA_DIR": str(tmp_path), "MITAURI_TOOL_PROFILE": profile},
     ).stdout.split()
     full = run("full")
-    assert len(full) == 48, full
+    assert len(full) == 51, full
     assert sorted(run("limited")) == ["maps_route", "next_departures", "plan_trip", "set_reminder", "think_harder"]
 
 

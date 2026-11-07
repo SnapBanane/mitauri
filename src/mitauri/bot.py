@@ -218,7 +218,7 @@ class MitauriBot(discord.Client):
             return
         for name in self.presence.newly_left_behind():
             label = self.watched_labels.get(name, name)
-            text = (f"{label} zurückgelassen? Seit 2 Minuten nicht mehr in Reichweite von Handy und Laptop. "
+            text = (f"{label} zurückgelassen? Seit 3 Minuten nicht mehr in Reichweite vom Handy. "
                     "Oder sie hat keinen Strom mehr.")
             record(self._data_dir, "left_behind_alert")  # no name or place, as nothing about location is kept
             if not (self._phone and await self._phone.deliver("notify", text)):

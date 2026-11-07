@@ -53,7 +53,7 @@ MAX_PENDING_REMINDERS = 100
 MAX_PREPARES_PER_MINUTE = 8  # each one can reach Groq, which allows 20 requests a minute
 LOOPBACK = ("127.0.0.1", "::1")
 DEVICE = web.RequestKey("device", str)
-INTERNAL_PATHS = ("/location", "/door", "/notifications", "/reply", "/place-reminders", "/presence", "/alarm-notice", "/island", "/watch", "/app-update-notice")
+INTERNAL_PATHS = ("/location", "/door", "/notifications", "/reply", "/place-reminders", "/quiet-places", "/presence", "/alarm-notice", "/island", "/watch", "/app-update-notice")
 MAX_REPLY_CHARS = 1_000
 MAX_WATCH_TITLE_CHARS = 40
 MAX_WATCH_TEXT_CHARS = 250
@@ -192,6 +192,7 @@ class Api:
         app.router.add_delete("/style", self._on_clear_style)
         app.router.add_post("/style-lines", self._on_style_lines)
         app.router.add_post("/place-reminders", self._on_place_reminder)
+        app.router.add_post("/quiet-places", self._on_quiet_place)
         app.router.add_post("/alarm-notice", self._on_alarm_notice)
         app.router.add_post("/island", self._on_island)
         app.router.add_post("/watch", self._on_watch)
@@ -860,6 +861,24 @@ class Api:
                 return await self._ask_phone("list_place_reminders")
             if action == "remove":
                 return await self._ask_phone("remove_place_reminder", reminder=str(data["reminder"]))
+        except (ValueError, KeyError, TypeError):
+            pass
+        raise web.HTTPBadRequest()
+
+    async def _on_quiet_place(self, request: web.Request) -> web.Response:
+        """Places where the bag check rests. Like place reminders, they live only on the phone."""
+        try:
+            data = await request.json()
+            action = str(data["action"])
+            if action == "add":
+                return await self._ask_phone(
+                    "add_quiet_place", name=str(data["name"])[:60], latitude=float(data["latitude"]),
+                    longitude=float(data["longitude"]), radius=float(data["radius"]),
+                )
+            if action == "list":
+                return await self._ask_phone("list_quiet_places")
+            if action == "remove":
+                return await self._ask_phone("remove_quiet_place", place=str(data["place"]))
         except (ValueError, KeyError, TypeError):
             pass
         raise web.HTTPBadRequest()

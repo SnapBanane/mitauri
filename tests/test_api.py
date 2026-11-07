@@ -380,6 +380,23 @@ def test_place_reminder_goes_to_the_phone_and_needs_the_internal_token(tmp_path)
     assert "Milch" not in log and "48.1" not in log
 
 
+def test_quiet_place_goes_to_the_phone_and_needs_the_internal_token(tmp_path):
+    async def test(session):
+        body = {"action": "add", "name": "Schule", "latitude": 48.1, "longitude": 11.5, "radius": 300}
+        raw = json.dumps(body).encode()
+        assert (await session.post(f"{BASE}/quiet-places", data=raw, headers=signed("POST", "/quiet-places", raw))).status == 401
+        assert (await session.post(f"{BASE}/quiet-places", json={"action": "nope"}, headers=INTERNAL)).status == 400
+        async with connect(session) as socket:
+            request = asyncio.create_task(session.post(f"{BASE}/quiet-places", json=body, headers=INTERNAL))
+            asked = await socket.receive_json()
+            assert (asked["type"], asked["name"], asked["radius"]) == ("add_quiet_place", "Schule", 300.0)
+            await socket.send_json({"type": "answer", "id": asked["id"], "result": "Added."})
+            assert await (await request).json() == {"result": "Added."}
+    with_api(test, tmp_path)
+    log = (tmp_path / "audit.log").read_text()
+    assert "Schule" not in log and "48.1" not in log
+
+
 def test_presence_status_is_internal_and_key_needs_a_paired_device(tmp_path):
     async def test(session):
         assert (await session.get(f"{BASE}/presence")).status == 401

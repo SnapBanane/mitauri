@@ -26,6 +26,7 @@ class MitauriService : Service() {
         super.onCreate()
         Mitauri.init(this)
         PlaceReminders.watchAll(this)
+        QuietPlaces.watchAll(this)
         PresenceBeacon.start(this)
         SensorListener.start(this)
         AutoMusic.start(this)

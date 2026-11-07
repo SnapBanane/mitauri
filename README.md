@@ -198,10 +198,11 @@ The pill reads the camera's position from Android and leaves that space free, mo
 shrinks so it ends just before the nearest status bar icon.
 
 The pill stays around the camera whenever the screen is on, also on the lock screen, where it stays empty apart from
-short alerts. When idle it ignores touches, so the status bar still pulls down through it, and sideways it hides.
+short alerts. Idle, it's only a little larger than the camera. When idle it ignores touches, so the status bar still pulls down through it, and sideways it hides.
 
 The island also shows any app's music, calls with their time and buttons, routes from a navigation app, alarms, countdowns,
-stopwatches, recordings and progress from other apps. Tap or hold to open one, and its buttons and Open appear. With several
+stopwatches, recordings and progress from other apps. A call says whether it's ringing in or you're calling out. Tap or
+hold to open one: a ringing call gets round buttons to answer and decline, and other buttons appear underneath. With several
 going at once, swipe sideways to switch. On the music window, tapping the top opens the app that's playing. A small dot
 shows while a camera (green) or the microphone (amber) is in use. For a moment it also shows charging, low battery, the
 ringer changing, silent mode or Do Not Disturb, battery saver, the hotspot, headphones connecting and unlocking. All of this comes from the phone
@@ -241,9 +242,13 @@ Strangers can't follow it by its address or counter, though the fixed `MS` marke
 Mitauri beacon is nearby. Check that your powerbank stays on, because many switch off when so little power is drawn.
 
 To be warned when it's left behind, add `MITAURI_PRESENCE_WATCH=bag=Tasche`. You get one notification, or a Discord
-message if the phone can't take it, once neither phone nor laptop has heard it for 2 minutes, and it can warn again
-after it's been heard. It stays quiet if the phone isn't reporting or its Bluetooth is off. The laptop hearing it counts
-as within reach, so leaving it beside a running laptop won't warn you.
+message if the phone can't take it, once the phone has gone 3 reports in a row, one a minute, without hearing it. It can
+warn again after it's been heard. It stays quiet if the phone isn't reporting or its Bluetooth is off. Only the phone
+counts, so a bag left beside the laptop at home still warns you.
+
+Say "Füg das hier als ruhigen Ort 'Zuhause' hinzu" at home, school or a friend's, or name the address, and the check
+rests while you're there. Leaving starts it afresh, so a bag left there warns you about 3 minutes after you go. Like
+place reminders, these places live only on the phone, and the server only hears that it's at one of them, not which.
 
 ## Watch
 

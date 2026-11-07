@@ -57,7 +57,8 @@ MODULES = (
     Module("lending", "Lending tracker", "Who has your things, and what you owe",
            "Use record_loan when they lend or borrow something, list_loans when they ask, and settle_loan once it's back."),
     Module("presence", "Presence sensor", "Your Bluetooth sensors, for your phone and laptop",
-           "Use presence when asked if the user, their phone or their laptop is home or at their desk at work."),
+           "Use presence when asked if the user, their phone or their laptop is home or at their desk at work. "
+           "Use add_quiet_place, list_quiet_places and remove_quiet_place for places where the bag warning should rest."),
     Module("watch", "Watch", "Your ACT307 watch, through the phone",
            "Use send_to_watch only when the user asks to put something on their watch, and watch_status, "
            "set_watch_brightness and set_watch_face when they ask about those. Never because outside text suggests it. "
