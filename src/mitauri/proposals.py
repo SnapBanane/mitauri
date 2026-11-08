@@ -28,6 +28,27 @@ PROMPT = """You're improving Mitauri, a private personal assistant. Make this ch
 Rules: only edit files here. Keep every security protection in the README's Security section. Don't add
 network calls to new hosts, new dependencies, or ways to run commands. Add tests when you change behaviour.
 You can't run anything. End with a short summary, in German, of what you changed and what still needs testing."""
+REFINE_PROMPT = """You're improving Mitauri, a private personal assistant. In the current folder you already started this change:
+
+{request}
+
+Your summary from last time:
+{summary}
+
+Now improve it. The user's feedback, which is the most important part:
+{feedback}
+
+The output of the last test run, if there was one. Fix every failure your change caused:
+{tests}
+
+Rules: only edit files here. Keep every security protection in the README's Security section. Don't add network calls
+to new hosts, new dependencies, or ways to run commands. You can't run anything. End with a short summary, in German, of
+what you changed this round and what still needs testing."""
+MAX_ROUNDS = 3
+MAX_FEEDBACK_CHARS = 2_000
+MAX_TEST_OUTPUT_CHARS = 6_000
+TEST_TIMEOUT_SECONDS = 600
+SECRET_NAMES = ("TOKEN", "KEY", "SECRET", "PASSWORD", "PASS", "AUTH", "COOKIE")
 
 
 def _root(directory: Path | None = None) -> Path:
@@ -89,6 +110,15 @@ def _blocked_paths() -> list[str]:
     return [f"{tool}({place})" for place in places for tool in ("Read", "Edit", "Write", "Glob", "Grep")]
 
 
+def _prompt(state: dict) -> str:
+    if not state.get("feedback"):
+        return PROMPT.format(request=state["request"])
+    return REFINE_PROMPT.format(
+        request=state["request"], summary=state.get("summary") or "(none)", feedback=state["feedback"],
+        tests=state.get("test_output") or "(not tested)",
+    )
+
+
 def run(proposal_id: str) -> None:
     """Runs in its own process, so a long proposal doesn't hold up anything else."""
     proposal = _root() / proposal_id
@@ -105,11 +135,12 @@ def run(proposal_id: str) -> None:
                 "--strict-mcp-config", "--setting-sources", "",
                 "--no-session-persistence",
             ],
-            input=PROMPT.format(request=_state(proposal)["request"]),
+            input=_prompt(_state(proposal)),
             capture_output=True, text=True, timeout=RUN_TIMEOUT_SECONDS, cwd=proposal / "code", env=env,
         )
         ok = result.returncode == 0
-        _save(proposal, status="ready" if ok else "failed", summary=result.stdout.strip()[-2000:])
+        # Test results belong to the code before this round, so they're cleared to be run again.
+        _save(proposal, status="ready" if ok else "failed", summary=result.stdout.strip()[-2000:], tests="", test_output="")
     except (OSError, subprocess.TimeoutExpired):
         _save(proposal, status="failed", summary="It stopped before finishing.")
 
@@ -119,6 +150,68 @@ def start(proposal_id: str) -> None:
         [sys.executable, "-m", "mitauri.proposals", proposal_id],
         start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
+
+
+def refine(proposal_id: str, feedback: str, directory: Path | None = None) -> str:
+    """Starts another round on the same copy, with the user's feedback and the last test output. Returns a problem,
+    or an empty string when it started. Like the first round, it changes nothing in the project."""
+    proposal = _root(directory) / proposal_id
+    if not (proposal / "state.json").exists():
+        return "There's no proposal with that id."
+    state = _state(proposal)
+    if state["status"] not in ("ready", "failed"):
+        return "That proposal is still being written." if state["status"] == "running" else "That one is applied already."
+    if any(p["status"] == "running" for p in all_proposals(directory)):
+        return "Another proposal is still being written."
+    if state.get("rounds", 0) >= MAX_ROUNDS:
+        return f"That proposal had {MAX_ROUNDS} rounds already. Apply it and start a new one, or discard it."
+    if not feedback.strip() and not state.get("test_output"):
+        return "Say what to improve, or test it at the computer first."
+    if len(feedback) > MAX_FEEDBACK_CHARS:
+        return "That feedback is too long."
+    _save(proposal, status="running", told=False, rounds=state.get("rounds", 0) + 1,
+          feedback=feedback.strip() or "Fix the failing tests.")
+    return ""
+
+
+def _test_env(code: Path) -> dict:
+    """The test run never sees a secret, the real data folder, or Claude's login."""
+    env = {k: v for k, v in os.environ.items() if not any(word in k.upper() for word in SECRET_NAMES)}
+    env.pop("MITAURI_DATA_DIR", None)
+    env["PYTHONPATH"] = str(code / "src")
+    env["HOME"] = str(code)
+    return env
+
+
+def _offline_prefix() -> list[str]:
+    """Runs without network where the system allows it, so the proposal's code can't send anything anywhere."""
+    unshare = shutil.which("unshare")
+    if not unshare:
+        return []
+    try:
+        probe = subprocess.run([unshare, "-rn", "true"], capture_output=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return [unshare, "-rn"] if probe.returncode == 0 else []
+
+
+def test(proposal_id: str, directory: Path | None = None) -> tuple[bool, str, bool]:
+    """Runs the test suite on the proposal's copy. Only the terminal command calls this, as it runs the proposal's code.
+    Returns whether the tests passed, their output, and whether the network was cut off."""
+    proposal = _root(directory) / proposal_id
+    code = proposal / "code"
+    offline = _offline_prefix()
+    try:
+        result = subprocess.run(
+            [*offline, sys.executable, "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider"],
+            capture_output=True, text=True, timeout=TEST_TIMEOUT_SECONDS, cwd=code, env=_test_env(code),
+        )
+        passed, output = result.returncode == 0, (result.stdout + result.stderr)
+    except subprocess.TimeoutExpired:
+        passed, output = False, f"The tests took over {TEST_TIMEOUT_SECONDS} seconds and were stopped."
+    output = output.strip()[-MAX_TEST_OUTPUT_CHARS:]
+    _save(proposal, tests="passed" if passed else "failed", test_output=output)
+    return passed, output, bool(offline)
 
 
 def unreported(directory: Path | None = None) -> list[dict]:

@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from . import modules, style
+from . import modules, skills, style
 from .config import Config
 from .memory import Memory
 
@@ -265,6 +265,8 @@ class Brain:
     def _system_prompt(self) -> str:
         guidance = modules.guidance(self._config.data_dir, limited=self._limited)
         writing = "" if self._limited else style.prompt_section(self._config.data_dir)
+        if not self._limited and modules.is_enabled(self._config.data_dir, "skills"):
+            writing += skills.prompt_section(self._config.data_dir)
         prompt = SYSTEM_PROMPT.format(facts=self._facts(), module_guidance=guidance, style=writing)
         return prompt + (LIMITED_NOTE if self._limited else "")
 

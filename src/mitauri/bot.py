@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 import discord
 
-from . import modules, proposals, research, transit, untis, wake, wake_planner, weather
+from . import modules, proposals, reflection, research, transit, untis, wake, wake_planner, weather
 from .audit import record
 from .brain import Brain, BrainError
 from .config import Config
@@ -67,6 +67,8 @@ class MitauriBot(discord.Client):
         self._briefing_time = time.fromisoformat(config.briefing_time) if config.briefing_time else None
         self._briefing_file = config.data_dir / "last_briefing.txt"
         self._scheduler = None
+        self._reflect_time = config.reflect_time
+        self._reflecting = False
 
     async def setup_hook(self) -> None:
         self._scheduler = asyncio.create_task(self._run_schedule())
@@ -111,7 +113,7 @@ class MitauriBot(discord.Client):
     async def _tick(self) -> None:
         now = datetime.now(self._timezone)
         # The alarm goes first, and each step on its own: one broken reminder or a Discord outage must not stop the rest.
-        steps = [self._check_school_wake(now), self._deliver_reminders(now), self._report_proposals(), self._check_left_behind(), self._report_research(), self._send_briefing(now)]
+        steps = [self._check_school_wake(now), self._deliver_reminders(now), self._report_proposals(), self._check_left_behind(), self._report_research(), self._send_briefing(now), self._reflect(now)]
         for step in steps:
             try:
                 await step
@@ -143,6 +145,31 @@ class MitauriBot(discord.Client):
             # Your calendar doesn't belong on Discord, so the briefing only goes to the phone.
             if self._phone:
                 await self._phone.deliver("notify", await self._ask_for_briefing())
+
+    async def _reflect(self, now: datetime) -> None:
+        """The nightly review. It runs at most once a day, and only when there were chats to learn from."""
+        if not self._reflect_time or self._reflecting or not modules.is_enabled(self._data_dir, "skills"):
+            return
+        last = self._data_dir / reflection.LAST_DATE_FILE
+        if not reflection.is_due(now, self._reflect_time, last.read_text() if last.exists() else None):
+            return
+        # Recorded first, so a failure can't retry all night and drain the usage limit.
+        last.write_text(now.date().isoformat())
+        self._reflecting = True
+        # In the background: it can take minutes, and reminders and alarms must not wait for it.
+        self._reflection_task = asyncio.create_task(self._run_reflection())
+
+    async def _run_reflection(self) -> None:
+        try:
+            report = await asyncio.to_thread(reflection.reflect, self._data_dir, self._timezone)
+            text = reflection.summary(report) if report else None
+            # What it learned comes from your chats, so like the briefing it only goes to the phone.
+            if text and self._phone:
+                await self._phone.deliver("notify", text)
+        except Exception:
+            log.exception("The nightly review failed")
+        finally:
+            self._reflecting = False
 
     async def _check_school_wake(self, now: datetime) -> None:
         settings = wake.load_settings(self._data_dir)

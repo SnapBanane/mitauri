@@ -114,6 +114,38 @@ Opus, with no shell and no access outside that copy. You get a message when it's
 computer: `mitauri proposal show <id>` to read it, and `mitauri proposal apply <id>` or `discard <id>`.
 Applying only works from an interactive terminal, so nothing on the phone can change the code.
 
+A proposal can go a few rounds before you apply it. At the computer, `mitauri proposal test <id>` runs the test suite
+on the proposal's copy, after you've read it and typed its id, with no secrets, no data folder and, where Linux allows,
+no network. Then `mitauri proposal refine <id> "Antworten auf Deutsch"` sends Opus back into the same copy with your
+feedback and the test output; with failing tests, the feedback can be left out. You can also say "Verbesser Vorschlag
+<id>: ..." to Mitauri. Each proposal gets up to 3 extra rounds, and nothing changes until you apply it.
+
+## Learning
+
+Mitauri learns how you like things done, the way Hermes Agent does. After a task that took several steps or a
+correction, it saves a skill: a short written procedure, like which tools to use for "Wann muss ich zur Schule los?"
+and what you care about in the answer. It tells you each time, and "Mach das rückgängig" goes back a version. Only the
+names of skills sit in Claude's instructions, and the steps load when a request needs them, so replies stay fast.
+
+Every night at 03:30, Sonnet reviews the day's saved chats, which tools failed and the skills Mitauri has. It writes
+new skills, improves ones that went wrong, retires ones nobody used for 3 weeks, and suggests up to two new abilities
+that would need code. The phone gets a short note of what changed. Ideas are only suggestions: say "Bau das" and it
+becomes an ordinary proposal for you to review. The review is one Claude request a night, skipped when there were
+fewer than 4 chats. It needs Long-term memory on. Change the time with `MITAURI_REFLECT_TIME=04:00`, or set it empty
+to turn the review off, and switch learning off completely under Settings > Modules.
+
+`mitauri skills` lists what it has learned, and `mitauri skills show|undo|forget <name>` reads, reverts or removes a
+skill. `mitauri reflect` runs the review now.
+
+Learning is limited on purpose, because a skill learned from a bad day stays around:
+
+- A skill is only text for Claude. It can't add tools or unlock anything, and every tool keeps its own checks.
+- A skill can't name the tools that must only run when you ask directly: the door, notification replies, the watch,
+  self-building and saving skills. Text that reads like orders to ignore the rules is refused too.
+- The review has no tools and no files. Only its JSON answer is used, and only within these limits.
+- At most 40 skills of 1,500 characters each, and each keeps its last 5 versions. The audit log records that a skill
+  changed, never what it says.
+
 ## Directions
 
 Ask for a route, like "route to Hamburg Hauptbahnhof by train". Mitauri sends a Google Maps link that
@@ -308,6 +340,10 @@ enter the address and one-time code in the app. Finish the checklist on the app'
   memories or location. Reminders never go there, only a note that one is waiting.
 - Calendar and task text is treated as data, not instructions. Mitauri has no shell access, and
   limits how much can be saved or how often it can ring, so a malicious entry can't do much.
+- Learned skills are text only, and can't lead to the door, notification replies, the watch or self-building. See
+  Learning.
+- `mitauri doctor` checks the setup: private folders and secrets, the server listening only on Tailscale, no
+  Anthropic API key in the way, skills within the rules, proposals waiting for review and tools that keep failing.
 - Encrypt the disk that holds the data folder, as nothing else protects it if the machine is stolen.
 - File permissions don't carry over to Windows. Restrict the data folder with `icacls` there.
 

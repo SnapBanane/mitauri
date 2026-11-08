@@ -1364,7 +1364,7 @@ def test_all_tools_still_exist_and_discord_only_gets_the_safe_ones(tmp_path):
         env={**os.environ, "MITAURI_DATA_DIR": str(tmp_path), "MITAURI_TOOL_PROFILE": profile},
     ).stdout.split()
     full = run("full")
-    assert len(full) == 51, full
+    assert len(full) == 57, full
     assert sorted(run("limited")) == ["maps_route", "next_departures", "plan_trip", "set_reminder", "think_harder"]
 
 
