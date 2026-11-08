@@ -127,12 +127,12 @@ correction, it saves a skill: a short written procedure, like which tools to use
 and what you care about in the answer. It tells you each time, and "Mach das rückgängig" goes back a version. Only the
 names of skills sit in Claude's instructions, and the steps load when a request needs them, so replies stay fast.
 
-Every night at 03:30, Sonnet reviews the day's saved chats, which tools failed and the skills Mitauri has. It writes
+There's also a nightly review, off by default. Once a night, Sonnet reviews the day's saved chats, which tools failed and the skills Mitauri has. It writes
 new skills, improves ones that went wrong, retires ones nobody used for 3 weeks, and suggests up to two new abilities
 that would need code. The phone gets a short note of what changed. Ideas are only suggestions: say "Bau das" and it
 becomes an ordinary proposal for you to review. The review is one Claude request a night, skipped when there were
-fewer than 4 chats. It needs Long-term memory on. Change the time with `MITAURI_REFLECT_TIME=04:00`, or set it empty
-to turn the review off, and switch learning off completely under Settings > Modules.
+fewer than 4 chats. It needs Long-term memory on. Turn it on with `MITAURI_REFLECT_TIME=03:30` in
+`~/.local/share/mitauri/secrets.env`, and switch learning off completely under Settings > Modules.
 
 `mitauri skills` lists what it has learned, and `mitauri skills show|undo|forget <name>` reads, reverts or removes a
 skill. `mitauri reflect` runs the review now.

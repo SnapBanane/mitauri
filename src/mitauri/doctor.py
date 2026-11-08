@@ -121,7 +121,7 @@ def _check_review(data_dir: Path, env: dict, add) -> None:
     if not modules.is_enabled(data_dir, "history"):
         add(WARN, "The nightly review needs Long-term memory on, as it learns from saved chats.")
         return
-    when = env.get("MITAURI_REFLECT_TIME", "03:30")
+    when = env.get("MITAURI_REFLECT_TIME", "")
     if not when:
         add(OK, "The nightly review is off.")
         return

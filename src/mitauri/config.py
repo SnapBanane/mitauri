@@ -19,7 +19,7 @@ class Config:
     claude_bin: str
     briefing_time: str = ""  # HH:MM, empty turns the morning briefing off
     thinking_model: str = "sonnet"
-    reflect_time: str = "03:30"  # HH:MM for the nightly review, empty turns it off
+    reflect_time: str = ""  # HH:MM for the nightly review, empty turns it off
 
 
 def data_dir() -> Path:
@@ -70,5 +70,5 @@ def load_config() -> Config:
         claude_bin=os.environ.get("MITAURI_CLAUDE_BIN", "claude"),
         briefing_time=os.environ.get("MITAURI_BRIEFING_TIME", ""),
         thinking_model=os.environ.get("MITAURI_THINKING_MODEL", "sonnet"),
-        reflect_time=os.environ.get("MITAURI_REFLECT_TIME", "03:30"),
+        reflect_time=os.environ.get("MITAURI_REFLECT_TIME", ""),
     )
