@@ -79,6 +79,11 @@ class ChatMemory:
             for i in best if scores[i] >= MIN_SIMILARITY
         ]
 
+    def since(self, moment: float) -> list[dict]:
+        """Turns after a moment, oldest first, for the nightly review."""
+        rows = self._db.execute("SELECT time, you, mitauri FROM turns WHERE time > ? ORDER BY time", (moment,)).fetchall()
+        return [{"when": when, "you": you, "mitauri": mitauri} for when, you, mitauri in rows]
+
     def count(self) -> int:
         return self._db.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
 

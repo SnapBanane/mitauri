@@ -51,8 +51,14 @@ def main() -> None:
     commands.add_parser("wake-test", help="play a test alarm on the speaker, once")
     commands.add_parser("wake-stop", help="stop an alarm that's playing")
     proposal = commands.add_parser("proposal", help="review changes Mitauri has suggested to itself")
-    proposal.add_argument("action", choices=["list", "show", "patch", "apply", "discard"])
+    proposal.add_argument("action", choices=["list", "show", "patch", "test", "refine", "apply", "discard"])
     proposal.add_argument("id", nargs="?")
+    proposal.add_argument("feedback", nargs="?", default="", help="for refine: what to improve")
+    commands.add_parser("doctor", help="check this setup for security and configuration mistakes")
+    skill_command = commands.add_parser("skills", help="see what Mitauri has learned, and undo or forget it")
+    skill_command.add_argument("action", choices=["list", "show", "undo", "forget"], nargs="?", default="list")
+    skill_command.add_argument("name", nargs="?")
+    commands.add_parser("reflect", help="run the nightly review now, using one Claude request")
     ask = commands.add_parser("ask", help="send one message from the terminal")
     ask.add_argument("message")
     args = parser.parse_args()
@@ -179,7 +185,26 @@ def main() -> None:
         return
 
     if args.command == "proposal":
-        review_proposal(args.action, args.id)
+        review_proposal(args.action, args.id, args.feedback)
+        return
+
+    if args.command == "doctor":
+        from . import doctor
+        raise SystemExit(doctor.report(config.data_dir))
+
+    if args.command == "skills":
+        review_skills(config.data_dir, args.action, args.name)
+        return
+
+    if args.command == "reflect":
+        from zoneinfo import ZoneInfo
+        from . import reflection
+        found = reflection.reflect(config.data_dir, ZoneInfo(config.timezone))
+        if found is None:
+            raise SystemExit("Nothing reviewed: too few new chats since the last review, or Claude didn't answer.")
+        print(reflection.summary(found) or "Nothing worth learning this time.")
+        for refused in found["refused"]:
+            print("refused:", refused)
         return
 
     if args.command == "google-login":
@@ -251,10 +276,12 @@ def alarm_notice(data_dir, over: bool, text: str = "") -> bool:
         return False
 
 
-def review_proposal(action: str, proposal_id: str | None) -> None:
+def review_proposal(action: str, proposal_id: str | None, feedback: str = "") -> None:
     if action == "list":
         for item in proposals.all_proposals():
-            print(item["id"], item["status"], item["request"][:70])
+            rounds = f" round {item['rounds'] + 1}" if item.get("rounds") else ""
+            tests = f" tests {item['tests']}" if item.get("tests") else ""
+            print(item["id"], item["status"] + rounds + tests, item["request"][:70])
         return
     if proposal_id is None:
         raise SystemExit("Name the proposal: mitauri proposal list")
@@ -269,6 +296,26 @@ def review_proposal(action: str, proposal_id: str | None) -> None:
     elif action == "discard":
         proposals.discard(proposal_id)
         print("Discarded.")
+    elif action == "test":
+        state = next((p for p in proposals.all_proposals() if p["id"] == proposal_id), None)
+        if state is None or state["status"] not in ("ready", "failed"):
+            raise SystemExit("Only a finished proposal can be tested.")
+        # Testing runs the proposal's code, so like applying it takes a person at this keyboard who has read it.
+        if not sys.stdin.isatty():
+            raise SystemExit("Testing only works from an interactive terminal.")
+        if input(f"This runs proposal {proposal_id}'s code here. Read it first with: mitauri proposal show {proposal_id}\n"
+                 "Type its id to run the tests: ") != proposal_id:
+            raise SystemExit("Not tested.")
+        passed, output, offline = proposals.test(proposal_id)
+        print(output)
+        print("\nNetwork was cut off for the test run." if offline else "\nNote: this system couldn't cut off the network for the test run.")
+        print("All tests passed." if passed else f"Tests failed. To let Mitauri fix them: mitauri proposal refine {proposal_id}")
+    elif action == "refine":
+        problem = proposals.refine(proposal_id, feedback)
+        if problem:
+            raise SystemExit(problem)
+        proposals.start(proposal_id)
+        print("Started another round. Check it with: mitauri proposal list")
     else:
         if not (proposals.PROJECT / ".git").exists():
             raise SystemExit("A released copy is replaced by the next release, so apply it on the laptop instead:\n"
@@ -285,6 +332,37 @@ def review_proposal(action: str, proposal_id: str | None) -> None:
         for name in applied:
             print("changed", name)
         print("Run the tests, then restart Mitauri.")
+
+
+def review_skills(data_dir, action: str, name: str | None) -> None:
+    from .skills import Skills
+    skills = Skills(data_dir / "skills.db")
+    if action == "list":
+        for skill in skills.all():
+            used = datetime_text(skill["last_used"]) if skill["last_used"] else "never"
+            print(f"{skill['name']:<24} v{skill['version']}  {skill['uses']:>3}x used, last {used}  ({skill['origin']})")
+            print(f"{'':<24} {skill['when']}")
+        return
+    if name is None:
+        raise SystemExit("Name the skill: mitauri skills list")
+    skill = skills.get(name)
+    if skill is None:
+        raise SystemExit("No such skill.")
+    if action == "show":
+        print(f"{skill['name']} (version {skill['version']}, from {skill['origin']})\nWhen: {skill['when']}\n\n{skill['steps']}")
+        for old in reversed(skill["history"]):
+            print(f"\n--- version {old['version']}, from {old['origin']}\n{old['steps']}")
+    elif action == "undo":
+        version = skills.undo(name)
+        print(f"Back to version {version}." if version else "There's no earlier version.")
+    else:
+        skills.forget(name)
+        print("Forgotten.")
+
+
+def datetime_text(moment: float) -> str:
+    from datetime import datetime
+    return datetime.fromtimestamp(moment).strftime("%Y-%m-%d %H:%M")
 
 
 def port_in_use(port: int) -> bool:

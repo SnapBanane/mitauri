@@ -15,3 +15,17 @@ def propose_code_change(request: str) -> str:
         return f"Not started: {problem}"
     proposals.start(proposal_id)
     return f"Started proposal {proposal_id}. The phone gets a message when it's ready. Nothing changes until the user applies it at their computer."
+
+
+@tool
+def refine_proposal(proposal_id: str, feedback: str) -> str:
+    """Improve a proposal you already wrote, with the user's feedback, only when the user directly asks for that.
+
+    It continues in the same isolated copy, and the test results from the computer are included. Nothing changes
+    until the user applies it at their computer.
+    """
+    problem = proposals.refine(proposal_id, feedback)
+    if problem:
+        return f"Not started: {problem}"
+    proposals.start(proposal_id)
+    return f"Improving proposal {proposal_id}. The phone gets a message when it's ready."

@@ -16,12 +16,13 @@ from zoneinfo import ZoneInfo
 
 from aiohttp import WSMsgType, web
 
-from . import app_update, dashboard, instant, modules, style, wake
+from . import app_update, dashboard, instant, modules, reflection, style, wake
 from .audit import record
 from .auth import Devices, FailureLimiter
 from .brain import TOOL_CALL, BrainError
 from .presence import load_key
 from .reminders import Reminders
+from .skills import Skills
 from .style import StyleLearner
 from .config import API_PORT, LOCATION_TIMEOUT_SECONDS, load_token  # noqa: F401
 from .speech import WAITING
@@ -209,6 +210,8 @@ class Api:
         app.router.add_delete("/memories/{id:[0-9]+}", self._on_delete_memory)
         app.router.add_post("/conversation/reset", self._on_reset_conversation)
         app.router.add_delete("/long-term-memory", self._on_clear_history)
+        app.router.add_get("/skills", self._on_list_skills)
+        app.router.add_delete("/skills/{name:[a-z0-9-]+}", self._on_forget_skill)
         app.router.add_get("/modules", self._on_list_modules)
         app.router.add_post("/modules", self._on_set_module)
         app.router.add_get("/dashboard", self._on_dashboard_file)
@@ -289,6 +292,19 @@ class Api:
     async def _on_delete_memory(self, request: web.Request) -> web.Response:
         removed = self._memory.remove(int(request.match_info["id"]))
         record(self._data_dir, "memory_deleted", removed=removed)
+        return web.json_response({"removed": removed})
+
+    async def _on_list_skills(self, _: web.Request) -> web.Response:
+        """What Mitauri has learned, for the app to show and let you remove."""
+        found = Skills(self._data_dir / "skills.db").all()
+        return web.json_response({
+            "skills": [{key: skill[key] for key in ("name", "when", "steps", "origin", "uses", "version")} for skill in found],
+            "last_review": reflection.last_report(self._data_dir),
+        })
+
+    async def _on_forget_skill(self, request: web.Request) -> web.Response:
+        removed = Skills(self._data_dir / "skills.db").forget(request.match_info["name"])
+        record(self._data_dir, "skill_forgotten", removed=removed)
         return web.json_response({"removed": removed})
 
     async def _on_list_modules(self, _: web.Request) -> web.Response:
