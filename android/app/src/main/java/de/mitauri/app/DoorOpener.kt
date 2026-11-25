@@ -80,7 +80,7 @@ object DoorLogin {
  * never retries a press, ignores repeats, and leaves a few seconds to cancel a misheard command.
  */
 object DoorOpener {
-    private const val DOOR_URL = "https://door.example.com/"
+    private val DOOR_URL = BuildConfig.DOOR_URL
     private const val CANCEL_MILLIS = 3_000L
     private const val PAGE_DELAY_MILLIS = 500L
     private const val RESULT_DELAY_MILLIS = 1_500L
@@ -116,7 +116,7 @@ object DoorOpener {
             return
         }
         val login = DoorLogin.load(app)
-        if (login == null) {
+        if (login == null || DOOR_URL.isEmpty()) {
             // Without a login here, the door app and its fingerprint check still work.
             Door.open(app)
             Island.hide()
@@ -206,7 +206,9 @@ object DoorOpener {
 
     private fun isTrusted(uri: Uri?) = uri != null && uri.scheme == "https" && isTrustedHost(uri.host)
 
-    private fun isTrustedHost(host: String?) = host != null && (host == "door.example.com" || host.endsWith(".door.example.com"))
+    private val doorDomain by lazy { Uri.parse(DOOR_URL).host?.removePrefix("www.") }
+
+    private fun isTrustedHost(host: String?) = host != null && doorDomain != null && (host == doorDomain || host.endsWith(".$doorDomain"))
 
     private val FILL_FN = """
             function (u, p) {

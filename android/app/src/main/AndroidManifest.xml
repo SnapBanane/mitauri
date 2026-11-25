@@ -36,7 +36,7 @@
     <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
 
     <queries>
-        <package android:name="com.example.doorapp" />
+        <package android:name="${doorPackage}" />
         <package android:name="com.veryfit2hr.second" />
         <intent>
             <action android:name="android.intent.action.MAIN" />

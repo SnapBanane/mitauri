@@ -18,7 +18,7 @@ import java.time.LocalTime
 
 /** Opens the door app. Its own fingerprint check still decides whether the door opens. */
 object Door {
-    private const val PACKAGE = "com.example.doorapp"
+    private val PACKAGE = BuildConfig.DOOR_PACKAGE
 
     fun open(context: Context): String {
         if (context.getSystemService(KeyguardManager::class.java).isKeyguardLocked) {

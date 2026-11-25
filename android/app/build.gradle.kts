@@ -11,12 +11,19 @@ android {
     namespace = "de.mitauri.app"
     compileSdk = 35
 
+    // The door's page and app stay out of the repo: set door.url and door.package in local.properties.
+    val local = Properties().apply { rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) } }
+    val doorPackage = local.getProperty("door.package", "")
+
     defaultConfig {
         applicationId = "de.mitauri.app"
+        buildConfigField("String", "DOOR_URL", "\"${local.getProperty("door.url", "")}\"")
+        buildConfigField("String", "DOOR_PACKAGE", "\"$doorPackage\"")
+        manifestPlaceholders["doorPackage"] = doorPackage.ifEmpty { "invalid.door.app" }
         minSdk = 30
         targetSdk = 35
-        versionCode = 47
-        versionName = "0.44"
+        versionCode = 48
+        versionName = "0.45.2"
     }
 
     // The key stays outside the repo. See scripts/make-signing-key.sh.
@@ -38,6 +45,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     compileOptions {
